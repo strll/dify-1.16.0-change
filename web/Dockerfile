@@ -2,8 +2,9 @@
 FROM node:22.22.1-alpine AS base
 LABEL maintainer="takatost@gmail.com"
 
-# if you located in China, you can use aliyun mirror to speed up
-# RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+# Use an Alpine mirror for the base package install in the local build
+# environment; this only affects image construction.
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 # Use a mirror for package metadata and tarballs when building in the local
 # environment; this avoids npmjs.org timeouts without changing the lockfile.
