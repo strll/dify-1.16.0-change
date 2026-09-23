@@ -609,8 +609,11 @@ export const useChat = (
           })
         },
         onMessageEnd: (messageEnd) => {
-          if (options.isNewAgent && messageEnd.conversation_id)
-            conversationIdRef.current = messageEnd.conversation_id
+          const messageEndConversationId = (
+            messageEnd as unknown as { conversation_id?: string }
+          ).conversation_id
+          if (options.isNewAgent && messageEndConversationId)
+            conversationIdRef.current = messageEndConversationId
           updateChatTreeNode(messageId, (responseItem) => {
             if (messageEnd.metadata?.annotation_reply) {
               responseItem.annotation = {
@@ -1260,8 +1263,11 @@ export const useChat = (
           })
         },
         onMessageEnd: (messageEnd) => {
-          if (options.isNewAgent && messageEnd.conversation_id)
-            conversationIdRef.current = messageEnd.conversation_id
+          const messageEndConversationId = (
+            messageEnd as unknown as { conversation_id?: string }
+          ).conversation_id
+          if (options.isNewAgent && messageEndConversationId)
+            conversationIdRef.current = messageEndConversationId
           if (messageEnd.metadata?.annotation_reply) {
             responseItem.id = messageEnd.id
             responseItem.annotation = {

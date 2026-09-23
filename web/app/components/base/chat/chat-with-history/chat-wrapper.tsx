@@ -235,7 +235,9 @@ const ChatWrapper = () => {
         onConversationComplete: isHistoryConversation ? undefined : handleConversationComplete,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
-      const appMode = isNewAgent ? 'agent-v2' : appData?.mode
+      const appMode = isNewAgent
+        ? 'agent-v2'
+        : (appData as (typeof appData & { mode?: string }) | undefined)?.mode
       if (appSourceType === AppSourceType.webApp && appMode)
         trackEvent('webapp_run', { app_mode: appMode })
     },
