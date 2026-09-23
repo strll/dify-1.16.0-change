@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 import * as ReactI18next from 'react-i18next'
 import { expectLoadingButton } from '@/test/button'
-import { renderWithConsoleQuery } from '@/test/console/query-data'
+import { renderWithSystemFeatures } from '@/__tests__/utils/mock-system-features'
 import { withSelectorKey } from '@/test/i18n-mock'
 import { useChatWithHistoryContext } from '../../context'
 import Sidebar from '../index'
@@ -16,7 +16,7 @@ let mockBranding: { enabled: boolean; workspace_logo: string } = {
   workspace_logo: '',
 }
 const render = (ui: ReactElement) =>
-  renderWithConsoleQuery(ui, {
+  renderWithSystemFeatures(ui, {
     systemFeatures: { branding: { ...mockBranding } },
   })
 
