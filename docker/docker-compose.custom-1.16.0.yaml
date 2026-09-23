@@ -1,0 +1,11 @@
+services:
+  api:
+    image: dify-api-custom:1.16.0-toolfile
+  worker:
+    image: dify-api-custom:1.16.0-toolfile
+  worker_beat:
+    image: dify-api-custom:1.16.0-toolfile
+  api_websocket:
+    image: dify-api-custom:1.16.0-toolfile
+  web:
+    image: dify-web-custom:1.16.0-toolfile

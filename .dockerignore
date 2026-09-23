@@ -1,4 +1,10 @@
 **/node_modules
+/node_modules
+node_modules
+web/node_modules
+packages/*/node_modules
+e2e/node_modules
+sdks/nodejs-client/node_modules
 **/.pnpm-store
 **/dist
 **/.next
