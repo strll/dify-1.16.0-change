@@ -2,7 +2,7 @@
 
 import type { MainNavItem, MainNavProps } from './types'
 import { cn } from '@langgenius/dify-ui/cn'
-import { useSuspenseQuery } from '@tanstack/react-query'
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import { useAtomValue } from 'jotai'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -19,6 +19,7 @@ import { systemFeaturesQueryOptions } from '@/features/system-features/client'
 import dynamic from '@/next/dynamic'
 import Link from '@/next/link'
 import { usePathname } from '@/next/navigation'
+import { get } from '@/service/base'
 import AccountSection from './components/account-section'
 import HelpMenu from './components/help-menu'
 import MainNavLink from './components/nav-link'
@@ -36,6 +37,11 @@ export function MainNav({ className }: MainNavProps) {
   const isCurrentWorkspaceEditor = useAtomValue(isCurrentWorkspaceEditorAtom)
   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
   const agentV2Enabled = isAgentV2Enabled()
+  const { data: userManagementAccess } = useQuery({
+    queryKey: ['user-management', 'access'],
+    queryFn: () => get<{ enabled: boolean }>('/user-management/access', {}, { silent: true }),
+    retry: false,
+  })
   const showEnvTag =
     langGeniusVersionInfo.current_env === 'TESTING' ||
     langGeniusVersionInfo.current_env === 'DEVELOPMENT'
@@ -49,6 +55,7 @@ export function MainNav({ className }: MainNavProps) {
           canUseAppDeploy,
           isCurrentWorkspaceDatasetOperator,
           marketplaceEnabled: systemFeatures.enable_marketplace,
+          userManagementEnabled: userManagementAccess?.enabled === true,
         }),
       ).map((route) => ({
         href: route.href,
@@ -63,6 +70,7 @@ export function MainNav({ className }: MainNavProps) {
       isCurrentWorkspaceDatasetOperator,
       systemFeatures.enable_marketplace,
       t,
+      userManagementAccess?.enabled,
     ],
   )
 

@@ -45,6 +45,7 @@ def init_app(app: DifyApp):
         upgrade_db,
         vdb_migrate,
     )
+    from controllers.console.user_management.commands import user_management_permission
 
     cmds_to_register = [
         reset_password,
@@ -88,6 +89,7 @@ def init_app(app: DifyApp):
         export_migration_data_template,
         import_migration_data,
         migration_data_wizard,
+        user_management_permission,
     ]
     for cmd in cmds_to_register:
         app.cli.add_command(cmd)

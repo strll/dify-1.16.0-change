@@ -4,8 +4,8 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 import * as ReactI18next from 'react-i18next'
-import { renderWithSystemFeatures } from '@/__tests__/utils/mock-system-features'
 import { expectLoadingButton } from '@/test/button'
+import { renderWithConsoleQuery } from '@/test/console/query-data'
 import { withSelectorKey } from '@/test/i18n-mock'
 import { useChatWithHistoryContext } from '../../context'
 import Sidebar from '../index'
@@ -16,7 +16,7 @@ let mockBranding: { enabled: boolean; workspace_logo: string } = {
   workspace_logo: '',
 }
 const render = (ui: ReactElement) =>
-  renderWithSystemFeatures(ui, {
+  renderWithConsoleQuery(ui, {
     systemFeatures: { branding: { ...mockBranding } },
   })
 
@@ -256,6 +256,17 @@ describe('Sidebar Index', () => {
       render(<Sidebar />)
       const newChatButton = screen.getByRole('button', { name: 'share.chat.newChat' })
       expect(newChatButton).toBeDisabled()
+    })
+
+    it('should keep the new chat button available while an installed app responds', () => {
+      vi.mocked(useChatWithHistoryContext).mockReturnValue({
+        ...mockContextValue,
+        isInstalledApp: true,
+        isResponding: true,
+      } as unknown as ChatWithHistoryContextValue)
+
+      render(<Sidebar />)
+      expect(screen.getByRole('button', { name: 'share.chat.newChat' })).toBeEnabled()
     })
 
     it('should enable new chat button when not responding', () => {

@@ -25,6 +25,7 @@ RESOURCE_MODULES = (
     "controllers.console.explore.workflow",
     "controllers.console.files",
     "controllers.console.remote_files",
+    "controllers.console.user_management.api",
 )
 
 for module_name in RESOURCE_MODULES:

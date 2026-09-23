@@ -17,7 +17,7 @@ import ActionButton from '@/app/components/base/action-button'
 import AppIcon from '@/app/components/base/app-icon'
 import List from '@/app/components/base/chat/chat-with-history/sidebar/list'
 import RenameModal from '@/app/components/base/chat/chat-with-history/sidebar/rename-modal'
-import DifyLogo from '@/app/components/base/logo/dify-logo'
+import { DifyLogo } from '@/app/components/base/logo/dify-logo'
 import MenuDropdown from '@/app/components/share/text-generation/menu-dropdown'
 import { systemFeaturesQueryOptions } from '@/features/system-features/client'
 import { useChatWithHistoryContext } from '../context'
@@ -119,7 +119,9 @@ const Sidebar = ({ isPanel }: Props) => {
       <div className="shrink-0 px-3 py-4">
         <Button
           variant="secondary-accent"
-          disabled={isResponding}
+          // Installed apps allow multiple concurrent conversations; the
+          // backend remains the only concurrency limit for those requests.
+          disabled={!isInstalledApp && isResponding}
           className="w-full justify-center"
           onClick={handleNewConversation}
         >
@@ -177,7 +179,7 @@ const Sidebar = ({ isPanel }: Props) => {
                   className="block h-5 w-auto"
                 />
               ) : (
-                <DifyLogo size="small" />
+                <DifyLogo alt="Dify" size="small" />
               )}
             </div>
           )}

@@ -480,15 +480,18 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   }>({ handleStop: noop })
   const handleChangeConversation = useCallback(
     (conversationId: string) => {
-      currentChatInstanceRef.current.handleStop()
+      // Installed apps keep the previous SSE request alive while the user
+      // switches conversations. Other chat surfaces retain Dify's original
+      // stop-on-switch behavior.
+      if (!isInstalledApp) currentChatInstanceRef.current.handleStop()
       setNewConversationId('')
       handleConversationIdInfoChange(conversationId)
       if (conversationId) setClearChatList(false)
     },
-    [handleConversationIdInfoChange, setClearChatList],
+    [handleConversationIdInfoChange, isInstalledApp, setClearChatList],
   )
   const handleNewConversation = useCallback(async () => {
-    currentChatInstanceRef.current.handleStop()
+    if (!isInstalledApp) currentChatInstanceRef.current.handleStop()
     setShowNewConversationItemInList(true)
     handleChangeConversation('')
     const conversationInputs: Record<string, any> = {}
@@ -501,6 +504,7 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     handleChangeConversation,
     setShowNewConversationItemInList,
     handleNewConversationInputsChange,
+    isInstalledApp,
     setClearChatList,
     inputsForms,
   ])

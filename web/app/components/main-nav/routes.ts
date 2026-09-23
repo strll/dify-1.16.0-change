@@ -1,6 +1,6 @@
 import { buildIntegrationPath } from '@/app/components/integrations/routes'
 
-type MainNavRouteVisibility = 'all' | 'notDatasetOperator' | 'appDeployEditor'
+type MainNavRouteVisibility = 'all' | 'notDatasetOperator' | 'appDeployEditor' | 'userManagement'
 
 const DATASET_COLLECTION_ROUTES = new Set(['create', 'create-from-pipeline', 'connect'])
 const DATASET_DOCUMENT_CREATION_ROUTES = new Set(['create', 'create-from-pipeline'])
@@ -21,6 +21,7 @@ export type MainNavRouteVisibilityOptions = {
   canUseAppDeploy: boolean
   isCurrentWorkspaceDatasetOperator: boolean
   marketplaceEnabled: boolean
+  userManagementEnabled?: boolean
 }
 
 export type DetailSidebarVisibilityOptions = Pick<
@@ -103,6 +104,15 @@ export const MAIN_NAV_ROUTES = [
     activeIcon: 'i-ri-rocket-fill',
     visibility: 'appDeployEditor',
   },
+  {
+    key: 'user-management',
+    href: '/user-management',
+    labelKey: 'mainNav.userManagement',
+    active: (path: string) => isPathUnderRoute(path, '/user-management'),
+    icon: 'i-ri-user-settings-line',
+    activeIcon: 'i-ri-user-settings-fill',
+    visibility: 'userManagement',
+  },
 ] as const satisfies readonly MainNavRouteConfig[]
 
 export function isMainNavRouteVisible(
@@ -116,6 +126,8 @@ export function isMainNavRouteVisible(
   if (route.visibility === 'all') return true
 
   if (route.visibility === 'notDatasetOperator') return !options.isCurrentWorkspaceDatasetOperator
+
+  if (route.visibility === 'userManagement') return options.userManagementEnabled === true
 
   return options.canUseAppDeploy
 }

@@ -26,6 +26,12 @@ import useTimestamp from '@/hooks/use-timestamp'
 import { useParams, usePathname } from '@/next/navigation'
 import { sseGet, ssePost } from '@/service/base'
 import { TransferMethod } from '@/types/app'
+import {
+  cleanupExpiredInstalledChatRecovery,
+  clearInstalledChatRecovery,
+  loadInstalledChatRecovery,
+  saveInstalledChatRecovery,
+} from '../installed-chat-recovery'
 import { getThreadMessages } from '../utils'
 import { getProcessedInputs, processOpeningStatement } from './utils'
 
@@ -211,6 +217,52 @@ export const useChat = (
 
   const [chatTree, setChatTree] = useState<ChatItemInTree[]>(prevChatTree || [])
   const chatTreeRef = useRef<ChatItemInTree[]>(chatTree)
+  const recoveryWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const recoverySessionIdRef = useRef(initialConversationId ?? `new-${uuidV4()}`)
+  const installedRecoveryEnabled = isInstalledAppPath(pathname) && Boolean(config?.appId)
+
+  const persistInstalledChatTree = useCallback(
+    (nextTree: ChatItemInTree[]) => {
+      if (!installedRecoveryEnabled || !config?.appId) return
+      if (recoveryWriteTimerRef.current) clearTimeout(recoveryWriteTimerRef.current)
+      recoveryWriteTimerRef.current = setTimeout(() => {
+        recoveryWriteTimerRef.current = null
+        const terminal = nextTree.some((item) =>
+          ['succeeded', 'failed', 'stopped'].includes(item.workflowProcess?.status || ''),
+        )
+        const conversationId = recoverySessionIdRef.current
+        if (!conversationId && !nextTree.length) return
+        const operation = terminal
+          ? clearInstalledChatRecovery(config.appId!, conversationId)
+          : saveInstalledChatRecovery(config.appId!, conversationId, nextTree)
+        void operation.catch(() => undefined)
+      }, 200)
+    },
+    [config?.appId, installedRecoveryEnabled],
+  )
+
+  useEffect(() => {
+    if (!installedRecoveryEnabled || !config?.appId) return
+    void cleanupExpiredInstalledChatRecovery().catch(() => undefined)
+    if (!initialConversationId) return
+    void loadInstalledChatRecovery(config.appId, initialConversationId)
+      .then((snapshot) => {
+        if (!snapshot || chatTreeRef.current.length > 0) return
+        chatTreeRef.current = snapshot.chatTree
+        setChatTree(snapshot.chatTree)
+      })
+      .catch(() => undefined)
+  }, [config?.appId, initialConversationId, installedRecoveryEnabled])
+
+  useEffect(() => {
+    persistInstalledChatTree(chatTree)
+  }, [chatTree, persistInstalledChatTree])
+
+  useEffect(() => {
+    return () => {
+      if (recoveryWriteTimerRef.current) clearTimeout(recoveryWriteTimerRef.current)
+    }
+  }, [])
   const [targetMessageId, setTargetMessageId] = useState<string>()
   const threadMessages = useMemo(
     () => getThreadMessages(chatTree, targetMessageId),
@@ -281,9 +333,10 @@ export const useChat = (
   }, [])
 
   useEffect(() => {
-    initialConversationIdRef.current = initialConversationId ?? ''
-    if (initialConversationId && !conversationIdRef.current)
-      conversationIdRef.current = initialConversationId
+    const nextConversationId = initialConversationId ?? ''
+    initialConversationIdRef.current = nextConversationId
+    conversationIdRef.current = nextConversationId
+    if (nextConversationId) recoverySessionIdRef.current = nextConversationId
   }, [initialConversationId])
 
   /** Find the target node by bfs and then operate on it */
@@ -322,8 +375,9 @@ export const useChat = (
       })
       setChatTree(nextState)
       chatTreeRef.current = nextState
+      persistInstalledChatTree(nextState)
     },
-    [produceChatTreeNode],
+    [persistInstalledChatTree, produceChatTreeNode],
   )
 
   const handleResponding = useCallback((isResponding: boolean) => {
@@ -340,7 +394,11 @@ export const useChat = (
     if (suggestedQuestionsAbortControllerRef.current)
       suggestedQuestionsAbortControllerRef.current.abort()
     if (workflowEventsAbortControllerRef.current) workflowEventsAbortControllerRef.current.abort()
-  }, [stopChat, handleResponding])
+    if (installedRecoveryEnabled && config?.appId)
+      void clearInstalledChatRecovery(config.appId, recoverySessionIdRef.current).catch(
+        () => undefined,
+      )
+  }, [config?.appId, handleResponding, installedRecoveryEnabled, stopChat])
 
   const handleRestart = useCallback(
     (cb?: any) => {
@@ -551,6 +609,8 @@ export const useChat = (
           })
         },
         onMessageEnd: (messageEnd) => {
+          if (options.isNewAgent && messageEnd.conversation_id)
+            conversationIdRef.current = messageEnd.conversation_id
           updateChatTreeNode(messageId, (responseItem) => {
             if (messageEnd.metadata?.annotation_reply) {
               responseItem.annotation = {
@@ -840,8 +900,9 @@ export const useChat = (
       }
       setChatTree(nextState)
       chatTreeRef.current = nextState
+      persistInstalledChatTree(nextState)
     },
-    [chatTree, produceChatTreeNode],
+    [chatTree, persistInstalledChatTree, produceChatTreeNode],
   )
 
   const handleSend = useCallback(
@@ -1199,6 +1260,8 @@ export const useChat = (
           })
         },
         onMessageEnd: (messageEnd) => {
+          if (options.isNewAgent && messageEnd.conversation_id)
+            conversationIdRef.current = messageEnd.conversation_id
           if (messageEnd.metadata?.annotation_reply) {
             responseItem.id = messageEnd.id
             responseItem.annotation = {
@@ -1642,5 +1705,6 @@ export const useChat = (
     handleAnnotationEdited,
     handleAnnotationAdded,
     handleAnnotationRemoved,
+    recoverySessionId: recoverySessionIdRef.current,
   }
 }

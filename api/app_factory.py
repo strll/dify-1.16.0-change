@@ -170,6 +170,7 @@ def initialize_extensions(app: DifyApp):
         ext_set_secretkey,
         ext_storage,
         ext_timezone,
+        ext_user_management,
         ext_warnings,
     )
 
@@ -205,6 +206,7 @@ def initialize_extensions(app: DifyApp):
         ext_request_logging,
         ext_session_factory,
         ext_oauth_bearer,
+        ext_user_management,
     ]
     for ext in extensions:
         short_name = ext.__name__.split(".")[-1]

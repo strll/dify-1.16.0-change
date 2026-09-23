@@ -6,6 +6,7 @@ import { cn } from '@langgenius/dify-ui/cn'
 import { RiArrowDownSLine, RiArrowUpSLine } from '@remixicon/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { trackEvent } from '@/app/components/base/amplitude'
 import AnswerIcon from '@/app/components/base/answer-icon'
 import AppIcon from '@/app/components/base/app-icon'
 import InputsForm from '@/app/components/base/chat/chat-with-history/inputs-form'
@@ -25,6 +26,7 @@ import { TransferMethod } from '@/types/app'
 import { formatBooleanInputs } from '@/utils/model-config'
 import Chat from '../chat'
 import { useChat } from '../chat/hooks'
+import { promoteInstalledChatRecovery } from '../installed-chat-recovery'
 import { getLastAnswer, isValidGeneratedAnswer } from '../utils'
 import { useChatWithHistoryContext } from './context'
 
@@ -87,6 +89,7 @@ const ChatWrapper = () => {
     handleSwitchSibling,
     isResponding: respondingState,
     suggestedQuestions,
+    recoverySessionId,
   } = useChat(
     appConfig,
     {
@@ -97,7 +100,7 @@ const ChatWrapper = () => {
     (taskId) => stopChatMessageResponding('', taskId, appSourceType, appId),
     clearChatList,
     setClearChatList,
-    undefined,
+    isInstalledApp ? currentConversationId : undefined,
     { isNewAgent, timezone },
   )
   const inputsFormValue = currentConversationId
@@ -148,6 +151,17 @@ const ChatWrapper = () => {
     return false
   }, [allInputsHidden, inputsForms, chatList, inputsFormValue])
 
+  const handleConversationComplete = useCallback(
+    (conversationId: string) => {
+      if (isInstalledApp && appId)
+        void promoteInstalledChatRecovery(appId, recoverySessionId, conversationId).catch(
+          () => undefined,
+        )
+      handleNewConversationCompleted(conversationId)
+    },
+    [appId, handleNewConversationCompleted, isInstalledApp, recoverySessionId],
+  )
+
   useEffect(() => {
     if (currentChatInstanceRef.current) currentChatInstanceRef.current.handleStop = handleStop
   }, [])
@@ -185,7 +199,7 @@ const ChatWrapper = () => {
       handleSwitchSibling(lastPausedNode.id, {
         onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
-        onConversationComplete: currentConversationId ? undefined : handleNewConversationCompleted,
+        onConversationComplete: currentConversationId ? undefined : handleConversationComplete,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
     }
@@ -218,9 +232,12 @@ const ChatWrapper = () => {
           : undefined,
         onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
-        onConversationComplete: isHistoryConversation ? undefined : handleNewConversationCompleted,
+        onConversationComplete: isHistoryConversation ? undefined : handleConversationComplete,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
+      const appMode = isNewAgent ? 'agent-v2' : appData?.mode
+      if (appSourceType === AppSourceType.webApp && appMode)
+        trackEvent('webapp_run', { app_mode: appMode })
     },
     [
       inputsForms,
@@ -232,8 +249,9 @@ const ChatWrapper = () => {
       appSourceType,
       appId,
       isHistoryConversation,
-      handleNewConversationCompleted,
+      handleConversationComplete,
       isNewAgent,
+      appData?.mode,
     ],
   )
 
@@ -258,17 +276,11 @@ const ChatWrapper = () => {
       handleSwitchSibling(siblingMessageId, {
         onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
-        onConversationComplete: currentConversationId ? undefined : handleNewConversationCompleted,
+        onConversationComplete: currentConversationId ? undefined : handleConversationComplete,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
     },
-    [
-      handleSwitchSibling,
-      currentConversationId,
-      handleNewConversationCompleted,
-      appSourceType,
-      appId,
-    ],
+    [handleSwitchSibling, currentConversationId, handleConversationComplete, appSourceType, appId],
   )
 
   const messageList = useMemo(() => {
