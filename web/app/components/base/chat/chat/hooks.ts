@@ -1692,8 +1692,30 @@ export const useChat = (
   )
 
   useEffect(() => {
-    if (clearChatList) handleRestart(() => clearChatListCallback?.(false))
-  }, [clearChatList, clearChatListCallback, handleRestart])
+    if (!clearChatList) return
+
+    if (installedRecoveryEnabled) {
+      // Starting another installed-app conversation must not abort the SSE
+      // request belonging to the previous conversation.  Reset only the
+      // visible tree; the running stream continues and recovery storage keeps
+      // its own snapshot for later switching/resume.
+      conversationIdRef.current = initialConversationIdRef.current
+      taskIdRef.current = ''
+      setChatTree([])
+      chatTreeRef.current = []
+      setSuggestedQuestions([])
+      clearChatListCallback?.(false)
+      return
+    }
+
+    handleRestart(() => clearChatListCallback?.(false))
+  }, [
+    clearChatList,
+    clearChatListCallback,
+    handleRestart,
+    initialConversationId,
+    installedRecoveryEnabled,
+  ])
 
   return {
     chatList,

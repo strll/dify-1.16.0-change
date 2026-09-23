@@ -24,6 +24,7 @@ from controllers.common.session import with_session
 from controllers.console import console_ns
 from controllers.console.wraps import account_initialization_required, setup_required, with_current_user
 from extensions.ext_database import db
+from core.db.session_factory import session_factory
 from libs.helper import EmailStr
 from libs.login import login_required
 from models.account import Account, AccountStatus, Tenant, TenantAccountJoin, TenantAccountRole
@@ -86,41 +87,48 @@ def _reconcile_pending(session: Session) -> None:
         select(workspace_assignments).where(workspace_assignments.c.status == "pending")
     ).mappings().all()
     for item in pending:
-        account = account_for_email(item["email"], session=session)
-        tenant = session.get(Tenant, item["workspace_id"]) if item["workspace_id"] else None
-        if account is None or tenant is None:
-            continue
-        existing = session.scalar(
-            select(TenantAccountJoin).where(
-                TenantAccountJoin.tenant_id == tenant.id,
-                TenantAccountJoin.account_id == account.id,
-            )
-        )
+        # TenantService commits internally in Dify 1.16.0.  Therefore a
+        # reconciliation must not run inside a SAVEPOINT owned by another
+        # request transaction; use a short-lived session for this item.
+        item_session = session_factory.create_session()
         try:
-            # Isolate each reconciliation so a conflict does not roll back
-            # assignments that were already processed in this request.
-            with session.begin_nested():
-                if existing is None:
-                    TenantService.create_tenant_member(
-                        tenant,
-                        account,
-                        session=session,
-                        role=item["role"],
-                    )
-                session.execute(
-                    workspace_assignments.update()
-                    .where(workspace_assignments.c.id == item["id"])
-                    .values(status="assigned", error=None)
+            account = account_for_email(item["email"], session=item_session)
+            tenant = item_session.get(Tenant, item["workspace_id"]) if item["workspace_id"] else None
+            if account is None or tenant is None:
+                item_session.close()
+                continue
+            existing = item_session.scalar(
+                select(TenantAccountJoin).where(
+                    TenantAccountJoin.tenant_id == tenant.id,
+                    TenantAccountJoin.account_id == account.id,
                 )
+            )
+            if existing is None:
+                TenantService.create_tenant_member(
+                    tenant,
+                    account,
+                    session=item_session,
+                    role=item["role"],
+                )
+            item_session.execute(
+                workspace_assignments.update()
+                .where(workspace_assignments.c.id == item["id"])
+                .values(status="assigned", error=None)
+            )
+            item_session.commit()
         except Exception as exc:
             # A workspace may have acquired an owner since the preallocation
             # was created.  Keep the row visible and explain why it was not
             # reconciled instead of failing every assignments request.
-            session.execute(
+            item_session.rollback()
+            item_session.execute(
                 workspace_assignments.update()
                 .where(workspace_assignments.c.id == item["id"])
                 .values(status="failed", error=str(exc))
             )
+            item_session.commit()
+        finally:
+            item_session.close()
 
 
 def _invite_with_global_access(
@@ -356,35 +364,40 @@ class UserManagementImportConfirmApi(Resource):
         payload = ImportConfirmPayload.model_validate(request.get_json(silent=True) or console_ns.payload or {})
         results: list[dict[str, Any]] = []
         for row in payload.rows:
+            row_session = session_factory.create_session()
             try:
-                # Keep one bad row from poisoning the transaction for the
-                # remaining rows in a bulk import.
-                with session.begin_nested():
-                    if payload.operation == "invite":
-                        if not current_user.current_tenant:
-                            raise BadRequest("No current workspace")
-                        try:
-                            token = RegisterService.invite_new_member(
-                                tenant=current_user.current_tenant,
-                                email=str(row.email),
-                                language=current_user.interface_language,
-                                role=row.role,
-                                inviter=current_user,
-                                session=session,
-                            )
-                        except NoPermissionError:
-                            token = _invite_with_global_access(
-                                current_user.current_tenant,
-                                str(row.email),
-                                row.role,
-                                current_user,
-                                language=current_user.interface_language,
-                                session=session,
-                            )
-                        result = {"status": "success", "email": str(row.email), "role": row.role, "invite_token": token}
-                    else:
-                        result = _assign_row(row, current_user, session=session)
+                # Dify 1.16.0 services commit internally.  Process each row
+                # in its own Session instead of wrapping those services in a
+                # SAVEPOINT, whose transaction would be closed by commit().
+                if payload.operation == "invite":
+                    if not current_user.current_tenant:
+                        raise BadRequest("No current workspace")
+                    try:
+                        token = RegisterService.invite_new_member(
+                            tenant=current_user.current_tenant,
+                            email=str(row.email),
+                            language=current_user.interface_language,
+                            role=row.role,
+                            inviter=current_user,
+                            session=row_session,
+                        )
+                    except NoPermissionError:
+                        token = _invite_with_global_access(
+                            current_user.current_tenant,
+                            str(row.email),
+                            row.role,
+                            current_user,
+                            language=current_user.interface_language,
+                            session=row_session,
+                        )
+                    result = {"status": "success", "email": str(row.email), "role": row.role, "invite_token": token}
+                else:
+                    result = _assign_row(row, current_user, session=row_session)
+                row_session.commit()
             except Exception as exc:
+                # Roll back before recording the failure.  Reusing a failed
+                # transaction here is the direct cause of the old error.
+                row_session.rollback()
                 result = {
                     "status": "failed",
                     "email": str(row.email),
@@ -393,6 +406,8 @@ class UserManagementImportConfirmApi(Resource):
                     "workspace_id": row.workspace_id or "",
                     "reason": str(exc),
                 }
+            finally:
+                row_session.close()
             results.append(result)
         audit(current_user.email, f"import_{payload.operation}", session=session, details={"count": len(results)})
         session.commit()
