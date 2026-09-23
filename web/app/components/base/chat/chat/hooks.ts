@@ -609,9 +609,8 @@ export const useChat = (
           })
         },
         onMessageEnd: (messageEnd) => {
-          const messageEndConversationId = (
-            messageEnd as unknown as { conversation_id?: string }
-          ).conversation_id
+          const messageEndConversationId = (messageEnd as unknown as { conversation_id?: string })
+            .conversation_id
           if (options.isNewAgent && messageEndConversationId)
             conversationIdRef.current = messageEndConversationId
           updateChatTreeNode(messageId, (responseItem) => {
@@ -1263,9 +1262,8 @@ export const useChat = (
           })
         },
         onMessageEnd: (messageEnd) => {
-          const messageEndConversationId = (
-            messageEnd as unknown as { conversation_id?: string }
-          ).conversation_id
+          const messageEndConversationId = (messageEnd as unknown as { conversation_id?: string })
+            .conversation_id
           if (options.isNewAgent && messageEndConversationId)
             conversationIdRef.current = messageEndConversationId
           if (messageEnd.metadata?.annotation_reply) {

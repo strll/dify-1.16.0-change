@@ -3,6 +3,11 @@ FROM python:3.12-slim-bookworm AS base
 
 WORKDIR /app/api
 
+# Make Debian package downloads resilient to transient mirror failures during
+# reproducible image builds.
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-retries
+
 # Install uv
 ENV UV_VERSION=0.8.9
 

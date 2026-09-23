@@ -253,7 +253,7 @@ const ChatWrapper = () => {
       isHistoryConversation,
       handleConversationComplete,
       isNewAgent,
-      appData?.mode,
+      appData,
     ],
   )
 

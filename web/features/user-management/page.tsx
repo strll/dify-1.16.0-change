@@ -229,9 +229,7 @@ const UserManagementPage = () => {
   return (
     <main className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto p-8">
       <header>
-        <h1 className="title-2xl-semi-bold text-text-primary">
-          用户管理
-        </h1>
+        <h1 className="title-2xl-semi-bold text-text-primary">用户管理</h1>
         <p className="mt-1 body-sm-regular text-text-tertiary">
           批量邀请成员、预分配工作空间并查看处理结果
         </p>
