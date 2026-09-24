@@ -513,7 +513,7 @@ describe('useChatWithHistory', () => {
       expect(mockDelConversation).toHaveBeenCalledTimes(1)
     })
 
-    it('should call handleNewConversation when deleting the current conversation', async () => {
+    it('should clear the current conversation without creating a new draft', async () => {
       // Arrange
       mockFetchConversations.mockResolvedValue(createConversationData())
       mockFetchChatList.mockResolvedValue({ data: [] })
@@ -532,10 +532,31 @@ describe('useChatWithHistory', () => {
         await result!.current.handleDeleteConversation('conversation-1', { onSuccess })
       })
 
-      // Assert: handleNewConversation side-effect: clearChatList set to true
+      // Assert: deleting the selected conversation clears the view without adding a draft item.
       await waitFor(() => {
         expect(result!.current.clearChatList).toBe(true)
       })
+      expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(false)
+    })
+
+    it('should remove a deleted draft without creating a replacement draft', async () => {
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+      mockDelConversation.mockRejectedValue(new Response(null, { status: 404 }))
+
+      const { result } = await renderWithClient(() => useChatWithHistory())
+      await act(async () => {
+        await result!.current.handleNewConversation()
+      })
+      await waitFor(() => expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(true))
+      const draftId = result!.current.currentConversationId
+
+      await act(async () => {
+        await result!.current.handleDeleteConversation(draftId, { onSuccess: vi.fn() })
+      })
+
+      expect(result!.current.currentConversationId).toBe('')
+      expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(false)
     })
   })
 

@@ -585,11 +585,31 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     setClearChatList,
     inputsForms,
   ])
+  const resetAfterConversationDeletion = useCallback(() => {
+    if (!isInstalledApp) currentChatInstanceRef.current.handleStop()
+    setDraftConversationIds((current) => current.filter((id) => id !== currentConversationId))
+    setShowNewConversationItemInList(false)
+    setNewConversationId('')
+    handleChangeConversation('')
+    const conversationInputs: Record<string, any> = {}
+    inputsForms.forEach((item: any) => {
+      conversationInputs[item.variable] = item.default || null
+    })
+    handleNewConversationInputsChange(conversationInputs)
+  }, [
+    currentConversationId,
+    handleChangeConversation,
+    handleNewConversationInputsChange,
+    inputsForms,
+    isInstalledApp,
+  ])
   useEffect(() => {
     if (!isInstalledApp || !appId) return
     const unsubscribe = subscribeConversationSyncEvents(appId, (event) => {
-      if (event.type === 'deleted' && event.conversationId === currentConversationId)
-        void handleNewConversation()
+      if (event.type === 'deleted') {
+        setDraftConversationIds((current) => current.filter((id) => id !== event.conversationId))
+        if (event.conversationId === currentConversationId) resetAfterConversationDeletion()
+      }
       invalidateShareConversations()
     })
     const refreshOnFocus = () => invalidateShareConversations()
@@ -598,7 +618,13 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       unsubscribe()
       window.removeEventListener('focus', refreshOnFocus)
     }
-  }, [appId, currentConversationId, handleNewConversation, invalidateShareConversations, isInstalledApp])
+  }, [
+    appId,
+    currentConversationId,
+    invalidateShareConversations,
+    isInstalledApp,
+    resetAfterConversationDeletion,
+  ])
   const handleUpdateConversationList = useCallback(() => {
     invalidateShareConversations()
   }, [invalidateShareConversations])
@@ -631,12 +657,13 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
           if (!(error instanceof Response && error.status === 404)) throw error
         }
         setOriginConversationList((current) => current.filter((item) => item.id !== conversationId))
+        setDraftConversationIds((current) => current.filter((id) => id !== conversationId))
         toast.success(t(($) => $['api.success'], { ns: 'common' }))
         onSuccess()
       } finally {
         setConversationDeleting(false)
       }
-      if (conversationId === currentConversationId) handleNewConversation()
+      if (conversationId === currentConversationId) resetAfterConversationDeletion()
       handleUpdateConversationList()
       if (appId) publishConversationSyncEvent({ type: 'deleted', appId, conversationId })
     },
@@ -645,9 +672,9 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       appId,
       t,
       handleUpdateConversationList,
-      handleNewConversation,
       currentConversationId,
       conversationDeleting,
+      resetAfterConversationDeletion,
     ],
   )
   const [conversationRenaming, setConversationRenaming] = useState(false)

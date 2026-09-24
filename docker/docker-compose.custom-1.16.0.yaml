@@ -8,4 +8,4 @@ services:
   api_websocket:
     image: dify-api-custom:1.16.0-sessionfix3
   web:
-    image: dify-web-custom:1.16.0-sessionfix3
+    image: dify-web-custom:1.16.0-sessionfix4
