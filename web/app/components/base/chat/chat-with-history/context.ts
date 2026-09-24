@@ -31,6 +31,7 @@ export type ChatWithHistoryContextValue = {
   conversationRenaming: boolean
   handleRenameConversation: (conversationId: string, newName: string, callback: Callback) => void
   handleNewConversationCompleted: (newConversationId: string) => void
+  handleConversationStarted: (conversationId: string) => void
   chatShouldReloadKey: string
   isMobile: boolean
   isInstalledApp: boolean
@@ -73,6 +74,7 @@ export const ChatWithHistoryContext = createContext<ChatWithHistoryContextValue>
   conversationRenaming: false,
   handleRenameConversation: noop,
   handleNewConversationCompleted: noop,
+  handleConversationStarted: noop,
   chatShouldReloadKey: '',
   isMobile: false,
   isInstalledApp: false,

@@ -32,6 +32,10 @@ import {
   useShareConversations,
 } from '@/service/use-share'
 import { TransferMethod } from '@/types/app'
+import {
+  publishConversationSyncEvent,
+  subscribeConversationSyncEvents,
+} from './conversation-sync'
 import { addFileInfos, sortAgentSorts } from '../../../tools/utils'
 import { enrichSubmittedHumanInputFormData } from '../chat/answer/human-input-content/submitted-utils'
 import {
@@ -40,6 +44,8 @@ import {
   getRawInputsFromUrlParams,
   getRawUserVariablesFromUrlParams,
 } from '../utils'
+
+export const isDraftConversationId = (conversationId: string) => conversationId.startsWith('draft:')
 
 function getFormattedChatList(messages: any[]) {
   const newChatList: ChatItem[] = []
@@ -191,6 +197,10 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     () => conversationIdInfo?.[appId || '']?.[userId || 'DEFAULT'] || '',
     [appId, conversationIdInfo, userId],
   )
+  const currentServerConversationId = useMemo(
+    () => (isDraftConversationId(currentConversationId) ? '' : currentConversationId),
+    [currentConversationId],
+  )
   const handleConversationIdInfoChange = useCallback(
     (changeConversationId: string) => {
       if (appId) {
@@ -207,11 +217,44 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     },
     [appId, conversationIdInfo, setConversationIdInfo, userId],
   )
+  const draftHydrationCheckedRef = useRef(false)
+  useEffect(() => {
+    // Draft IDs are intentionally session-only and must never survive a reload.
+    // userId loads asynchronously via getProcessedSystemVariablesFromUrlParams,
+    // so we cannot rely on the targeted keyPath. Scan every per-user entry and
+    // clear any draft value to ensure stale placeholders do not resurrect.
+    if (draftHydrationCheckedRef.current) return
+    if (!appId || !conversationIdInfo) return
+    const perApp = conversationIdInfo[appId]
+    if (!perApp) {
+      draftHydrationCheckedRef.current = true
+      return
+    }
+    let mutated = false
+    const nextPerApp: Record<string, string> = {}
+    for (const [key, value] of Object.entries(perApp)) {
+      if (isDraftConversationId(value)) {
+        nextPerApp[key] = ''
+        mutated = true
+      } else {
+        nextPerApp[key] = value
+      }
+    }
+    if (!mutated) {
+      draftHydrationCheckedRef.current = true
+      return
+    }
+    setConversationIdInfo({
+      ...conversationIdInfo,
+      [appId]: nextPerApp,
+    })
+    draftHydrationCheckedRef.current = true
+  }, [appId, conversationIdInfo, setConversationIdInfo])
   const [newConversationId, setNewConversationId] = useState('')
   const chatShouldReloadKey = useMemo(() => {
-    if (currentConversationId === newConversationId) return ''
-    return currentConversationId
-  }, [currentConversationId, newConversationId])
+    if (currentServerConversationId === newConversationId) return ''
+    return currentServerConversationId
+  }, [currentServerConversationId, newConversationId])
   const { data: appPinnedConversationData } = useShareConversations(
     {
       appSourceType,
@@ -239,7 +282,11 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
         refetchOnReconnect: false,
       },
     )
-  const { data: appChatListData, isLoading: appChatListDataLoading } = useShareChatList(
+  const {
+    data: appChatListData,
+    error: appChatListError,
+    isLoading: appChatListDataLoading,
+  } = useShareChatList(
     {
       conversationId: chatShouldReloadKey,
       appSourceType,
@@ -256,12 +303,13 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   const [isResponding, setIsResponding] = useState(false)
   const appPrevChatTree = useMemo(
     () =>
-      currentConversationId && appChatListData?.data.length
+      currentServerConversationId && appChatListData?.data.length
         ? buildChatItemTree(getFormattedChatList(appChatListData.data))
         : [],
-    [appChatListData, currentConversationId],
+    [appChatListData, currentServerConversationId],
   )
   const [showNewConversationItemInList, setShowNewConversationItemInList] = useState(false)
+  const [draftConversationIds, setDraftConversationIds] = useState<string[]>([])
   const pinnedConversationList = useMemo(() => {
     return appPinnedConversationData?.data || []
   }, [appPinnedConversationData])
@@ -375,22 +423,49 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   )
   const [originConversationList, setOriginConversationList] = useState<ConversationItem[]>([])
   useEffect(() => {
+    // A persisted conversation can be removed or belong to an older app
+    // instance. Clear only a confirmed 404 so transient network failures do
+    // not discard the user's selected conversation.
+    if (
+      !isInstalledApp ||
+      !currentServerConversationId ||
+      !(appChatListError instanceof Response && appChatListError.status === 404)
+    )
+      return
+
+    // oxlint-disable-next-line eslint-react/set-state-in-effect -- A confirmed 404 invalidates the selected local item.
+    setOriginConversationList((current) =>
+      current.filter((item) => item.id !== currentServerConversationId),
+    )
+    handleConversationIdInfoChange('')
+  }, [
+    appChatListError,
+    currentServerConversationId,
+    handleConversationIdInfoChange,
+    isInstalledApp,
+  ])
+  useEffect(() => {
     if (appConversationData?.data && !appConversationDataLoading)
       // oxlint-disable-next-line eslint-react/set-state-in-effect -- Conversation query results intentionally replace the local editable list.
-      setOriginConversationList(appConversationData?.data)
+      setOriginConversationList((current) => {
+        const serverItems = appConversationData.data
+        const serverIds = new Set(serverItems.map((item) => item.id))
+        // Keep locally-confirmed conversations while the server list catches
+        // up after the first streaming event returns a conversation ID.
+        const localItems = current.filter((item) => item.id && !serverIds.has(item.id))
+        return [...localItems, ...serverItems]
+      })
   }, [appConversationData, appConversationDataLoading])
   const conversationList = useMemo(() => {
     const data = originConversationList.slice()
-    if (showNewConversationItemInList && data[0]?.id !== '') {
-      data.unshift({
-        id: '',
-        name: t(($) => $['chat.newChatDefaultName'], { ns: 'share' }),
-        inputs: {},
-        introduction: '',
-      })
-    }
-    return data
-  }, [originConversationList, showNewConversationItemInList, t])
+    const drafts = draftConversationIds.map((id, index) => ({
+      id,
+      name: `${t(($) => $['chat.newChatDefaultName'], { ns: 'share' })}${index ? ` ${index}` : ''}`,
+      inputs: {},
+      introduction: '',
+    }))
+    return [...drafts, ...data]
+  }, [draftConversationIds, originConversationList, t])
   useEffect(() => {
     if (newConversation) {
       // oxlint-disable-next-line eslint-react/set-state-in-effect -- Newly resolved conversation names intentionally patch the local list cache.
@@ -486,14 +561,16 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       if (!isInstalledApp) currentChatInstanceRef.current.handleStop()
       setNewConversationId('')
       handleConversationIdInfoChange(conversationId)
-      if (conversationId) setClearChatList(false)
+      setClearChatList(!conversationId || isDraftConversationId(conversationId))
     },
     [handleConversationIdInfoChange, isInstalledApp, setClearChatList],
   )
   const handleNewConversation = useCallback(async () => {
     if (!isInstalledApp) currentChatInstanceRef.current.handleStop()
+    const draftId = `draft:${crypto.randomUUID()}`
+    setDraftConversationIds((current) => [...current, draftId])
     setShowNewConversationItemInList(true)
-    handleChangeConversation('')
+    handleChangeConversation(draftId)
     const conversationInputs: Record<string, any> = {}
     inputsForms.forEach((item: any) => {
       conversationInputs[item.variable] = item.default || null
@@ -508,6 +585,20 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     setClearChatList,
     inputsForms,
   ])
+  useEffect(() => {
+    if (!isInstalledApp || !appId) return
+    const unsubscribe = subscribeConversationSyncEvents(appId, (event) => {
+      if (event.type === 'deleted' && event.conversationId === currentConversationId)
+        void handleNewConversation()
+      invalidateShareConversations()
+    })
+    const refreshOnFocus = () => invalidateShareConversations()
+    window.addEventListener('focus', refreshOnFocus)
+    return () => {
+      unsubscribe()
+      window.removeEventListener('focus', refreshOnFocus)
+    }
+  }, [appId, currentConversationId, handleNewConversation, invalidateShareConversations, isInstalledApp])
   const handleUpdateConversationList = useCallback(() => {
     invalidateShareConversations()
   }, [invalidateShareConversations])
@@ -533,7 +624,13 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       if (conversationDeleting) return
       try {
         setConversationDeleting(true)
-        await delConversation(appSourceType, appId, conversationId)
+        try {
+          await delConversation(appSourceType, appId, conversationId)
+        } catch (error) {
+          // Deletion is idempotent: another tab may have removed it already.
+          if (!(error instanceof Response && error.status === 404)) throw error
+        }
+        setOriginConversationList((current) => current.filter((item) => item.id !== conversationId))
         toast.success(t(($) => $['api.success'], { ns: 'common' }))
         onSuccess()
       } finally {
@@ -541,6 +638,7 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       }
       if (conversationId === currentConversationId) handleNewConversation()
       handleUpdateConversationList()
+      if (appId) publishConversationSyncEvent({ type: 'deleted', appId, conversationId })
     },
     [
       isInstalledApp,
@@ -581,14 +679,47 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     },
     [isInstalledApp, appId, t, conversationRenaming, originConversationList],
   )
+  const handleConversationStarted = useCallback(
+    (conversationId: string, sessionId?: string) => {
+      // Prefer the session the stream was started from (the draft placeholder)
+      // so we always remove exactly that one. Fall back to the current view
+      // only when the caller could not provide the originating session id.
+      const draftSessionId = sessionId
+        ? (isDraftConversationId(sessionId) ? sessionId : '')
+        : (isDraftConversationId(currentConversationId) ? currentConversationId : '')
+      setNewConversationId(conversationId)
+      if (draftSessionId)
+        setDraftConversationIds((current) => current.filter((id) => id !== draftSessionId))
+      // Persist the real ID as soon as the first SSE event arrives. Keep a
+      // background conversation from changing the visible selection after the
+      // user has switched to another chat.
+      if (!sessionId || sessionId === currentConversationId)
+        handleConversationIdInfoChange(conversationId)
+      setOriginConversationList((current) => {
+        if (current.some((item) => item.id === conversationId)) return current
+        return [
+          {
+            id: conversationId,
+            name: t(($) => $['chat.newChatDefaultName'], { ns: 'share' }),
+            inputs: {},
+            introduction: '',
+          },
+          ...current,
+        ]
+      })
+      if (appId) publishConversationSyncEvent({ type: 'created', appId, conversationId })
+    },
+    [appId, currentConversationId, handleConversationIdInfoChange, t],
+  )
   const handleNewConversationCompleted = useCallback(
     (newConversationId: string) => {
+      handleConversationStarted(newConversationId)
       setNewConversationId(newConversationId)
       handleConversationIdInfoChange(newConversationId)
       setShowNewConversationItemInList(false)
       invalidateShareConversations()
     },
-    [handleConversationIdInfoChange, invalidateShareConversations],
+    [handleConversationIdInfoChange, handleConversationStarted, invalidateShareConversations],
   )
   const handleFeedback = useCallback(
     async (messageId: string, feedback: Feedback) => {
@@ -636,6 +767,7 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     conversationRenaming,
     handleRenameConversation,
     handleNewConversationCompleted,
+    handleConversationStarted,
     newConversationId,
     chatShouldReloadKey,
     handleFeedback,

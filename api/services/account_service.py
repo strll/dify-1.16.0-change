@@ -195,8 +195,16 @@ class AccountService:
         return set(getattr(getattr(permissions, "workspace", None), "permission_keys", []) or [])
 
     @staticmethod
-    def get_rbac_workspace_owner_account_id(tenant_id: str, actor_account_id: str, *, session: Session) -> str:
-        """Return the account id bound to the workspace owner RBAC role."""
+    def get_rbac_workspace_owner_account_id(
+        tenant_id: str, actor_account_id: str, *, session: Session
+    ) -> str | None:
+        """Return the workspace owner account id when one is configured.
+
+        Some legacy workspaces can temporarily have no owner binding. Callers
+        that are removing a non-owner member must still be able to complete
+        the membership removal; resource reassignment is simply skipped in
+        that case.
+        """
         owner_role_id = AccountService._resolve_legacy_role_id(
             tenant_id=tenant_id,
             account_id=actor_account_id,
@@ -208,9 +216,7 @@ class AccountService:
             role_id=owner_role_id,
             options=ListOption(page_number=1, results_per_page=1),
         ).data
-        if not owner_members:
-            raise ValueError(f"Workspace RBAC owner not found for tenant {tenant_id}.")
-        return owner_members[0].account_id
+        return owner_members[0].account_id if owner_members else None
 
     @staticmethod
     def is_rbac_workspace_owner(
@@ -1686,7 +1692,16 @@ class TenantService:
             raise InvalidActionError("Invalid action.")
 
         if member:
-            if operator.id == member.id:
+            member_join = session.scalar(
+                select(TenantAccountJoin)
+                .where(TenantAccountJoin.tenant_id == tenant.id, TenantAccountJoin.account_id == member.id)
+                .limit(1)
+            )
+            if action == "remove" and member_join and member_join.role == TenantAccountRole.OWNER:
+                if operator.id == member.id:
+                    raise CannotOperateSelfError("Cannot operate self.")
+                raise NoPermissionError(f"No permission to {action} member.")
+            if action != "remove" and operator.id == member.id:
                 raise CannotOperateSelfError("Cannot operate self.")
 
         if dify_config.RBAC_ENABLED:
@@ -1745,9 +1760,6 @@ class TenantService:
         activated) and no remaining workspace memberships, the orphaned account
         record is deleted as well.
         """
-        if operator.id == account.id:
-            raise CannotOperateSelfError("Cannot operate self.")
-
         TenantService.check_member_permission(tenant, operator, account, "remove", session=session)
 
         ta = session.scalar(
@@ -1777,25 +1789,23 @@ class TenantService:
                 )
                 .limit(1)
             )
-        if owner_id is None:
-            raise ValueError(f"Workspace owner not found for tenant {tenant.id}.")
-
-        session.execute(
-            update(App)
-            .where(
-                App.tenant_id == tenant.id,
-                App.maintainer == account_id,
+        if owner_id is not None:
+            session.execute(
+                update(App)
+                .where(
+                    App.tenant_id == tenant.id,
+                    App.maintainer == account_id,
+                )
+                .values(maintainer=owner_id)
             )
-            .values(maintainer=owner_id)
-        )
-        session.execute(
-            update(Dataset)
-            .where(
-                Dataset.tenant_id == tenant.id,
-                Dataset.maintainer == account_id,
+            session.execute(
+                update(Dataset)
+                .where(
+                    Dataset.tenant_id == tenant.id,
+                    Dataset.maintainer == account_id,
+                )
+                .values(maintainer=owner_id)
             )
-            .values(maintainer=owner_id)
-        )
         session.delete(ta)
 
         # Clean up orphaned pending accounts (invited but never activated)

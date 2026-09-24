@@ -937,6 +937,27 @@ class TestTenantService:
         assert sqlite_session.get(TenantAccountJoin, member_join.id) is None
         assert sqlite_session.get(Account, active_member.id) is active_member
 
+    @pytest.mark.parametrize("sqlite_session", [(Account, Tenant, TenantAccountJoin, App, Dataset)], indirect=True)
+    def test_remove_member_without_workspace_owner(self, sqlite_session: Session):
+        """A non-owner member can be removed from a legacy ownerless workspace."""
+        tenant = Tenant(name="Ownerless Workspace")
+        operator = Account(name="Operator", email="operator@example.com")
+        member = Account(name="Member", email="member@example.com", status=AccountStatus.ACTIVE)
+        sqlite_session.add_all([tenant, operator, member])
+        sqlite_session.flush()
+        self._add_tenant_account_join(sqlite_session, tenant, operator.id, TenantAccountRole.ADMIN)
+        member_join = self._add_tenant_account_join(sqlite_session, tenant, member.id, TenantAccountRole.NORMAL)
+        sqlite_session.commit()
+
+        with (
+            patch("services.account_service.dify_config.BILLING_ENABLED", False),
+            patch("services.enterprise.account_deletion_sync.sync_workspace_member_removal", return_value=True),
+        ):
+            TenantService.remove_member_from_tenant(tenant, member, operator, session=sqlite_session)
+
+        assert sqlite_session.get(TenantAccountJoin, member_join.id) is None
+        assert sqlite_session.get(Account, member.id) is member
+
     # ==================== Tenant Switching Tests ====================
 
     @pytest.mark.parametrize("sqlite_session", [(Tenant, TenantAccountJoin)], indirect=True)
@@ -1139,6 +1160,33 @@ class TestTenantService:
         sqlite_session.commit()
 
         TenantService.check_member_permission(tenant, mock_operator, mock_member, "remove", session=sqlite_session)
+
+    @pytest.mark.parametrize("sqlite_session", [(Tenant, TenantAccountJoin)], indirect=True)
+    def test_member_can_remove_self_when_target_role_is_not_owner(self, sqlite_session: Session):
+        """Removing the current account is allowed when its target role is non-owner."""
+        tenant = Tenant(name="Test Workspace")
+        sqlite_session.add(tenant)
+        sqlite_session.flush()
+        account = TestAccountAssociatedDataFactory.create_account_mock(account_id="member-789")
+        self._add_tenant_account_join(sqlite_session, tenant, account.id, TenantAccountRole.ADMIN)
+        sqlite_session.commit()
+
+        TenantService.check_member_permission(tenant, account, account, "remove", session=sqlite_session)
+
+    @pytest.mark.parametrize("sqlite_session", [(Tenant, TenantAccountJoin)], indirect=True)
+    def test_owner_cannot_remove_self(self, sqlite_session: Session):
+        """An owner target remains protected, including when operator and target match."""
+        tenant = Tenant(name="Test Workspace")
+        sqlite_session.add(tenant)
+        sqlite_session.flush()
+        account = TestAccountAssociatedDataFactory.create_account_mock(account_id="owner-789")
+        self._add_tenant_account_join(sqlite_session, tenant, account.id, TenantAccountRole.OWNER)
+        sqlite_session.commit()
+
+        from services.errors.account import CannotOperateSelfError
+
+        with pytest.raises(CannotOperateSelfError):
+            TenantService.check_member_permission(tenant, account, account, "remove", session=sqlite_session)
 
     @pytest.mark.parametrize("sqlite_session", [(Tenant, TenantAccountJoin)], indirect=True)
     def test_admin_cannot_remove_owner_member(self, sqlite_session: Session):

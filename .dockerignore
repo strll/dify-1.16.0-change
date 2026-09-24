@@ -14,6 +14,7 @@ sdks/nodejs-client/node_modules
 **/*.pyc
 **/.mypy_cache
 **/.ruff_cache
+docker/volumes
 .git
 .github
 *.md

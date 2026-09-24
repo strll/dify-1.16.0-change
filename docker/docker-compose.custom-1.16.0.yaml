@@ -1,11 +1,11 @@
 services:
   api:
-    image: dify-api-custom:1.16.0-toolfile
+    image: dify-api-custom:1.16.0-sessionfix3
   worker:
-    image: dify-api-custom:1.16.0-toolfile
+    image: dify-api-custom:1.16.0-sessionfix3
   worker_beat:
-    image: dify-api-custom:1.16.0-toolfile
+    image: dify-api-custom:1.16.0-sessionfix3
   api_websocket:
-    image: dify-api-custom:1.16.0-toolfile
+    image: dify-api-custom:1.16.0-sessionfix3
   web:
-    image: dify-web-custom:1.16.0-toolfile
+    image: dify-web-custom:1.16.0-sessionfix3

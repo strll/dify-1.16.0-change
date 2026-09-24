@@ -299,6 +299,31 @@ describe('useChatWithHistory', () => {
 
   // Scenario: conversation id updates persist to localStorage.
   describe('Conversation id persistence', () => {
+    it('should replace the active draft immediately when the stream returns a conversation id', async () => {
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+
+      const { result } = await renderWithClient(() => useChatWithHistory())
+
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const draftId = result!.current.currentConversationId
+      expect(draftId).toMatch(/^draft:/)
+
+      act(() => {
+        result!.current.handleConversationStarted('conversation-stream', draftId)
+      })
+
+      await waitFor(() => {
+        expect(result!.current.currentConversationId).toBe('conversation-stream')
+        expect(result!.current.conversationList[0]!.id).toBe('conversation-stream')
+      })
+      const storedValue = localStorage.getItem(CONVERSATION_ID_INFO)
+      const parsed = storedValue ? JSON.parse(storedValue) : {}
+      expect(parsed['app-1']?.['user-1']).toBe('conversation-stream')
+    })
+
     it('should store new conversation id in localStorage after completion', async () => {
       // Arrange
       const listData = createConversationData({
@@ -641,7 +666,7 @@ describe('useChatWithHistory', () => {
 
       // Assert
       await waitFor(() => {
-        expect(result!.current.currentConversationId).toBe('')
+        expect(result!.current.currentConversationId).toMatch(/^draft:/)
       })
       expect(result!.current.clearChatList).toBe(true)
     })
@@ -666,9 +691,9 @@ describe('useChatWithHistory', () => {
         result!.current.handleNewConversation()
       })
 
-      // Assert: new item with empty id prepended
+      // Assert: each blank conversation has an isolated draft ID
       await waitFor(() => {
-        expect(result!.current.conversationList[0]!.id).toBe('')
+        expect(result!.current.conversationList[0]!.id).toMatch(/^draft:/)
       })
     })
   })
@@ -2229,6 +2254,125 @@ describe('useChatWithHistory', () => {
       await waitFor(() => {
         expect(result!.current.newConversationInputs.empty_default_var).toBeNull()
       })
+    })
+  })
+
+  // Scenario: handleConversationStarted uses the originating sessionId, not the
+  // currentConversationId, so a draft is removed exactly once even when the
+  // user has navigated to a different conversation mid-stream.
+  describe('handleConversationStarted with multiple drafts', () => {
+    it('should remove only the draft matching the originating sessionId', async () => {
+      // Arrange
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+
+      const { result } = await renderWithClient(() => useChatWithHistory())
+
+      // Act: create two drafts, then "send" from the older one (already
+      // pushed out of view by the user clicking "new" again).
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const olderDraft = result!.current.currentConversationId
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const newerDraft = result!.current.currentConversationId
+
+      // The conversationList keeps drafts in insertion order. Both must be
+      // present before the stream returns.
+      const listAfterCreate = result!.current.conversationList
+      expect(listAfterCreate.map((item) => item.id)).toEqual(
+        expect.arrayContaining([olderDraft, newerDraft]),
+      )
+
+      // Background stream returns the conversation id for the older draft.
+      act(() => {
+        result!.current.handleConversationStarted('conversation-real-older', olderDraft)
+      })
+
+      // Assert: only the older draft placeholder is removed.
+      await waitFor(() => {
+        const ids = result!.current.conversationList.map((item) => item.id)
+        expect(ids).not.toContain(olderDraft)
+        expect(ids).toContain(newerDraft)
+      })
+      // currentConversationId stays on the newer draft (background stream).
+      expect(result!.current.currentConversationId).toBe(newerDraft)
+    })
+
+    it('should keep currentConversationId unchanged when the completion belongs to a background draft', async () => {
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+
+      const { result } = await renderWithClient(() => useChatWithHistory())
+
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const olderDraft = result!.current.currentConversationId
+
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const newerDraft = result!.current.currentConversationId
+
+      // Background completion for the older draft
+      act(() => {
+        result!.current.handleConversationStarted('conversation-real-older', olderDraft)
+      })
+
+      // Assert
+      expect(result!.current.currentConversationId).toBe(newerDraft)
+      const ids = result!.current.conversationList.map((item) => item.id)
+      expect(ids).not.toContain(olderDraft)
+      expect(ids).toContain(newerDraft)
+    })
+
+    it('should fall back to currentConversationId when no sessionId is provided', async () => {
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+
+      const { result } = await renderWithClient(() => useChatWithHistory())
+
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const draftId = result!.current.currentConversationId
+
+      // No sessionId -> remove based on current view
+      act(() => {
+        result!.current.handleConversationStarted('conversation-real')
+      })
+
+      await waitFor(() => {
+        const ids = result!.current.conversationList.map((item) => item.id)
+        expect(ids).not.toContain(draftId)
+      })
+      expect(result!.current.currentConversationId).toBe('conversation-real')
+    })
+  })
+
+  // Scenario: stored draft IDs from a previous session must not be replayed
+  // after the page is reloaded.
+  describe('Draft hydration on mount', () => {
+    it('should clear a persisted draft id from localStorage on mount', async () => {
+      // Arrange: simulate a leftover draft id from a previous session.
+      setConversationIdInfo('app-1', 'draft:leftover-from-old-session')
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+
+      // Act
+      const { result } = await renderWithClient(() => useChatWithHistory())
+
+      // Assert: localStorage was cleared of the stale draft.
+      await waitFor(() => {
+        const stored = localStorage.getItem(CONVERSATION_ID_INFO)
+        const parsed = stored ? JSON.parse(stored) : {}
+        expect(parsed['app-1']?.['user-1']).not.toMatch(/^draft:/)
+        expect(parsed['app-1']?.DEFAULT).not.toMatch(/^draft:/)
+      })
+      expect(result!.current.currentConversationId).not.toMatch(/^draft:/)
     })
   })
 })

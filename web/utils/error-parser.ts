@@ -24,8 +24,6 @@ export const parsePluginErrorMessage = async (error: any): Promise<string> => {
     rawMessage = error?.message || error?.toString() || 'Unknown error'
   }
 
-  console.log('rawMessage', rawMessage)
-
   // Try to extract nested JSON from PluginInvokeError
   // Use greedy match .+ to capture the complete JSON object with nested braces
   const pluginErrorPattern = /PluginInvokeError:\s*(\{.+\})/
@@ -44,4 +42,12 @@ export const parsePluginErrorMessage = async (error: any): Promise<string> => {
   }
 
   return rawMessage
+}
+
+/** Convert fetch/HTTP errors into the backend message users can act on. */
+export const parseErrorMessage = async (error: unknown): Promise<string> => {
+  if (error instanceof Response) return parsePluginErrorMessage(error)
+  if (error instanceof Error && error.message) return parsePluginErrorMessage(error)
+  if (typeof error === 'string' && error) return error
+  return 'Unknown error'
 }

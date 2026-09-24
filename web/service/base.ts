@@ -346,6 +346,19 @@ export const handleStream = (
                 onCompleted?.(true, bufferObj?.message)
                 return
               }
+              // Workflow streams commonly announce the conversation on
+              // workflow_started before the first message event. Surface
+              // that ID immediately so installed-app lists can show the
+              // conversation while execution is still running.
+              if (isFirstMessage && bufferObj.conversation_id) {
+                onData('', true, {
+                  event: bufferObj.event,
+                  conversationId: bufferObj.conversation_id,
+                  taskId: bufferObj.task_id,
+                  messageId: bufferObj.message_id ?? bufferObj.id,
+                })
+                isFirstMessage = false
+              }
               if (bufferObj.event === 'message' || bufferObj.event === 'agent_message') {
                 // can not use format here. Because message is splitted.
                 onData(unicodeToChar(bufferObj.answer), isFirstMessage, {

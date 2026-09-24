@@ -4,7 +4,7 @@ import type { ChatConfig, ChatItem, ChatItemInTree, OnSend } from '../types'
 import { Avatar } from '@langgenius/dify-ui/avatar'
 import { cn } from '@langgenius/dify-ui/cn'
 import { RiArrowDownSLine, RiArrowUpSLine } from '@remixicon/react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { trackEvent } from '@/app/components/base/amplitude'
 import AnswerIcon from '@/app/components/base/answer-icon'
@@ -29,6 +29,7 @@ import { useChat } from '../chat/hooks'
 import { promoteInstalledChatRecovery } from '../installed-chat-recovery'
 import { getLastAnswer, isValidGeneratedAnswer } from '../utils'
 import { useChatWithHistoryContext } from './context'
+import { isDraftConversationId } from './hooks'
 
 const ChatWrapper = () => {
   const { t } = useTranslation()
@@ -42,6 +43,7 @@ const ChatWrapper = () => {
     newConversationInputs,
     newConversationInputsRef,
     handleNewConversationCompleted,
+    handleConversationStarted,
     isMobile,
     isInstalledApp,
     appId,
@@ -67,13 +69,20 @@ const ChatWrapper = () => {
       : undefined
 
   // Semantic variable for better code readability
-  const isHistoryConversation = !!currentConversationId
+  const isDraftConversation = isDraftConversationId(currentConversationId)
+  const serverConversationId = isDraftConversation ? '' : currentConversationId
+  const isHistoryConversation = !!serverConversationId
 
   const appConfig = useMemo(() => {
     const config = appParams || {}
 
     return {
       ...config,
+      // Inject the installed-app id so chat/hooks can detect the /installed/*
+      // path and enable per-session isolation + IndexedDB recovery. The webApp
+      // surface keeps appId undefined and falls back to the legacy single-tree
+      // behaviour.
+      ...(isInstalledApp && appId ? { appId } : {}),
       file_upload: {
         ...(config as any).file_upload,
         fileUploadConfig: (config as any).system_parameters,
@@ -81,7 +90,7 @@ const ChatWrapper = () => {
       supportFeedback: true,
       opening_statement: currentConversationItem?.introduction || (config as any).opening_statement,
     } as ChatConfig
-  }, [appParams, currentConversationItem?.introduction])
+  }, [appParams, currentConversationItem?.introduction, appId, isInstalledApp])
   const {
     chatList,
     handleSend,
@@ -93,17 +102,23 @@ const ChatWrapper = () => {
   } = useChat(
     appConfig,
     {
-      inputs: (currentConversationId ? currentConversationInputs : newConversationInputs) as any,
+      inputs: (serverConversationId ? currentConversationInputs : newConversationInputs) as any,
       inputsForm: inputsForms,
     },
     appPrevChatTree,
     (taskId) => stopChatMessageResponding('', taskId, appSourceType, appId),
     clearChatList,
     setClearChatList,
-    isInstalledApp ? currentConversationId : undefined,
-    { isNewAgent, timezone },
+    isInstalledApp ? serverConversationId : undefined,
+    {
+      isNewAgent,
+      timezone,
+      // Keep the local message tree keyed by the visible draft/server conversation.
+      sessionId: isInstalledApp ? currentConversationId : serverConversationId,
+    },
   )
-  const inputsFormValue = currentConversationId
+  const resumedWorkflowMessagesRef = useRef(new Set<string>())
+  const inputsFormValue = serverConversationId
     ? currentConversationInputs
     : newConversationInputsRef?.current
   const inputDisabled = useMemo(() => {
@@ -152,14 +167,17 @@ const ChatWrapper = () => {
   }, [allInputsHidden, inputsForms, chatList, inputsFormValue])
 
   const handleConversationComplete = useCallback(
-    (conversationId: string) => {
+    (conversationId: string, _workflowRunId?: string, sessionId?: string) => {
+      // A workflow may finish after the user has switched to another chat.
+      // Keep its history/recovery data, but do not navigate the visible chat away.
+      if (sessionId && sessionId !== currentConversationId) return
       if (isInstalledApp && appId)
         void promoteInstalledChatRecovery(appId, recoverySessionId, conversationId).catch(
           () => undefined,
         )
       handleNewConversationCompleted(conversationId)
     },
-    [appId, handleNewConversationCompleted, isInstalledApp, recoverySessionId],
+    [appId, currentConversationId, handleNewConversationCompleted, isInstalledApp, recoverySessionId],
   )
 
   useEffect(() => {
@@ -170,9 +188,10 @@ const ChatWrapper = () => {
     setIsResponding(respondingState)
   }, [respondingState, setIsResponding])
 
-  // Resume paused workflows when chat history is loaded
+  // Reconnect unfinished workflows after refresh. chatList already contains
+  // the merged server history and IndexedDB recovery snapshot.
   useEffect(() => {
-    if (!appPrevChatTree || appPrevChatTree.length === 0) return
+    if (!chatList || chatList.length === 0) return
 
     // Find the last answer item with workflow_run_id that needs resumption (DFS - find deepest first)
     let lastPausedNode: ChatItemInTree | undefined
@@ -181,29 +200,31 @@ const ChatWrapper = () => {
         // DFS: recurse to children first
         if (node.children && node.children.length > 0) findLastPausedWorkflow(node.children)
 
-        // Track the last node with humanInputFormDataList
         if (
           node.isAnswer &&
           node.workflow_run_id &&
-          node.humanInputFormDataList &&
-          node.humanInputFormDataList.length > 0
+          (node.workflowProcess?.status === 'running' ||
+            node.workflowProcess?.status === 'paused' ||
+            (node.humanInputFormDataList && node.humanInputFormDataList.length > 0))
         )
           lastPausedNode = node
       })
     }
 
-    findLastPausedWorkflow(appPrevChatTree)
+    findLastPausedWorkflow(chatList)
 
     // Only resume the last paused workflow
-    if (lastPausedNode) {
+    if (lastPausedNode && !resumedWorkflowMessagesRef.current.has(lastPausedNode.id)) {
+      resumedWorkflowMessagesRef.current.add(lastPausedNode.id)
       handleSwitchSibling(lastPausedNode.id, {
         onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
+        onConversationStarted: handleConversationStarted,
         onConversationComplete: currentConversationId ? undefined : handleConversationComplete,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
     }
-  }, [])
+  }, [appId, appSourceType, chatList, currentConversationId, handleConversationComplete, handleConversationStarted, handleSwitchSibling])
 
   const [hasSent, setHasSent] = useState(false)
   const [prevConversationId, setPrevConversationId] = useState(currentConversationId)
@@ -222,7 +243,7 @@ const ChatWrapper = () => {
           inputsForms,
           currentConversationId ? currentConversationInputs : newConversationInputs,
         ),
-        conversation_id: currentConversationId,
+        conversation_id: serverConversationId,
         parent_message_id: (isRegenerate ? parentAnswer?.id : getLastAnswer(chatList)?.id) || null,
       }
 
@@ -230,8 +251,9 @@ const ChatWrapper = () => {
         onGetConversationMessages: isNewAgent
           ? (conversationId) => fetchChatList(conversationId, appSourceType, appId)
           : undefined,
-        onGetSuggestedQuestions: (responseItemId) =>
+      onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
+        onConversationStarted: handleConversationStarted,
         onConversationComplete: isHistoryConversation ? undefined : handleConversationComplete,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
@@ -244,6 +266,7 @@ const ChatWrapper = () => {
     [
       inputsForms,
       currentConversationId,
+      serverConversationId,
       currentConversationInputs,
       newConversationInputs,
       chatList,
@@ -286,10 +309,10 @@ const ChatWrapper = () => {
   )
 
   const messageList = useMemo(() => {
-    if (currentConversationId || chatList.length > 1) return chatList
+    if (serverConversationId || chatList.length > 1) return chatList
     // Without messages we are in the welcome screen, so hide the opening statement from chatlist
     return chatList.filter((item) => !item.isOpeningStatement)
-  }, [chatList, currentConversationId])
+  }, [chatList, serverConversationId])
 
   const handleSubmitHumanInputForm = useCallback(
     async (formToken: string, formData: any) => {

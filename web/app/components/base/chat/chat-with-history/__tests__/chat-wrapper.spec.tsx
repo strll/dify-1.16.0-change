@@ -525,7 +525,16 @@ describe('ChatWrapper', () => {
     const handleSwitchSibling = vi.fn()
     vi.mocked(useChat).mockReturnValue({
       ...defaultChatHookReturn,
-      chatList: [],
+      chatList: [
+        {
+          id: '1',
+          content: 'Answer',
+          isAnswer: true,
+          workflow_run_id: 'w1',
+          humanInputFormDataList: [{ label: 'test' }] as unknown as HumanInputFormData[],
+          children: [],
+        },
+      ],
       handleSwitchSibling,
     } as unknown as ChatHookReturn)
 
@@ -551,7 +560,16 @@ describe('ChatWrapper', () => {
     const handleSwitchSibling = vi.fn()
     vi.mocked(useChat).mockReturnValue({
       ...defaultChatHookReturn,
-      chatList: [],
+      chatList: [
+        {
+          id: 'resume-node',
+          content: 'Paused answer',
+          isAnswer: true,
+          workflow_run_id: 'workflow-1',
+          humanInputFormDataList: [{ label: 'resume' }] as unknown as HumanInputFormData[],
+          children: [],
+        },
+      ],
       handleSwitchSibling,
     } as unknown as ChatHookReturn)
 
@@ -585,7 +603,30 @@ describe('ChatWrapper', () => {
     const handleSwitchSibling = vi.fn()
     vi.mocked(useChat).mockReturnValue({
       ...defaultChatHookReturn,
-      chatList: [],
+      chatList: [
+        {
+          id: '1',
+          content: 'First',
+          isAnswer: true,
+          children: [
+            {
+              id: '2',
+              content: 'Second',
+              isAnswer: false,
+              children: [
+                {
+                  id: '3',
+                  content: 'Third',
+                  isAnswer: true,
+                  workflow_run_id: 'w2',
+                  humanInputFormDataList: [{ label: 'third' }] as unknown as HumanInputFormData[],
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
       handleSwitchSibling,
     } as unknown as ChatHookReturn)
 
@@ -1611,14 +1652,14 @@ describe('ChatWrapper', () => {
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter', keyCode: 13 })
 
     await waitFor(() => {
-      expect(handleSend).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Object),
-        expect.objectContaining({
-          onConversationComplete: handleNewConversationCompleted,
-        }),
-      )
+      expect(handleSend).toHaveBeenCalled()
     })
+    // The wrapper's onConversationComplete is an inline callback that calls
+    // handleNewConversationCompleted when the stream finishes. Invoke it to
+    // verify that wiring instead of comparing function references.
+    const options = handleSend.mock.calls[0]![2]
+    options.onConversationComplete?.('conv-1')
+    expect(handleNewConversationCompleted).toHaveBeenCalledWith('conv-1')
   })
 
   it('should pass undefined onConversationComplete for existing conversation in doSend', async () => {
@@ -1657,25 +1698,27 @@ describe('ChatWrapper', () => {
   it('should handle workflow resumption in new conversation', () => {
     const handleSwitchSibling = vi.fn()
     const handleNewConversationCompleted = vi.fn()
+    const handleConversationStarted = vi.fn()
+    const pausedNode = {
+      id: '1',
+      content: 'Answer',
+      isAnswer: true,
+      workflow_run_id: 'w1',
+      humanInputFormDataList: [{ label: 'test' }] as unknown as HumanInputFormData[],
+      children: [],
+    }
 
     vi.mocked(useChatWithHistoryContext).mockReturnValue({
       ...defaultContextValue,
       currentConversationId: '',
       handleNewConversationCompleted,
-      appPrevChatTree: [
-        {
-          id: '1',
-          content: 'Answer',
-          isAnswer: true,
-          workflow_run_id: 'w1',
-          humanInputFormDataList: [{ label: 'test' }] as unknown as HumanInputFormData[],
-          children: [],
-        },
-      ],
+      handleConversationStarted,
+      appPrevChatTree: [pausedNode],
     })
 
     vi.mocked(useChat).mockReturnValue({
       ...defaultChatHookReturn,
+      chatList: [pausedNode],
       handleSwitchSibling,
     } as unknown as ChatHookReturn)
 
@@ -1684,33 +1727,37 @@ describe('ChatWrapper', () => {
     expect(handleSwitchSibling).toHaveBeenCalledWith(
       '1',
       expect.objectContaining({
-        onConversationComplete: handleNewConversationCompleted,
+        onConversationStarted: handleConversationStarted,
+        isPublicAPI: expect.any(Boolean),
       }),
     )
+    // The wrapper supplies its own onConversationComplete for new conversations.
+    const resumeOptions = handleSwitchSibling.mock.calls[0]![1]
+    expect(resumeOptions.onConversationComplete).toBeDefined()
   })
 
   it('should handle workflow resumption in existing conversation', () => {
     const handleSwitchSibling = vi.fn()
     const handleNewConversationCompleted = vi.fn()
+    const pausedNode = {
+      id: '1',
+      content: 'Answer',
+      isAnswer: true,
+      workflow_run_id: 'w1',
+      humanInputFormDataList: [{ label: 'test' }] as unknown as HumanInputFormData[],
+      children: [],
+    }
 
     vi.mocked(useChatWithHistoryContext).mockReturnValue({
       ...defaultContextValue,
       currentConversationId: '123',
       handleNewConversationCompleted,
-      appPrevChatTree: [
-        {
-          id: '1',
-          content: 'Answer',
-          isAnswer: true,
-          workflow_run_id: 'w1',
-          humanInputFormDataList: [{ label: 'test' }] as unknown as HumanInputFormData[],
-          children: [],
-        },
-      ],
+      appPrevChatTree: [pausedNode],
     })
 
     vi.mocked(useChat).mockReturnValue({
       ...defaultChatHookReturn,
+      chatList: [pausedNode],
       handleSwitchSibling,
     } as unknown as ChatHookReturn)
 

@@ -10,11 +10,18 @@
 !packages/
 !packages/**/
 !packages/**/package.json
+packages/**/node_modules
+packages/**/node_modules/**
 !sdks/
 !sdks/nodejs-client/
 !sdks/nodejs-client/package.json
 
 .git
+docker
+docker/volumes
+docker/volumes/**
+docker/volumes/plugin_daemon
+docker/volumes/plugin_daemon/**
 node_modules
 .pnpm-store
 web/.env

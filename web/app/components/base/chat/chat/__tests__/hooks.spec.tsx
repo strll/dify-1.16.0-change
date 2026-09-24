@@ -44,6 +44,14 @@ vi.mock('@/next/navigation', () => ({
   useRouter: vi.fn(() => ({})),
 }))
 
+vi.mock('../../installed-chat-recovery', () => ({
+  saveInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
+  loadInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
+  clearInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
+  promoteInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
+  cleanupExpiredInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
+}))
+
 const createAbortControllerMock = () => {
   const controller = new AbortController()
   vi.spyOn(controller, 'abort')
@@ -3354,6 +3362,141 @@ describe('useChat', () => {
       const responseItem = result.current.chatList.find((item) => item.id === 'm-1')!
       expect(responseItem.reasoningContent).toEqual({ llm: 'resumed thought' })
       expect(responseItem.reasoningFinished).toBe(true)
+    })
+  })
+
+  // Scenario: an installed-app page mounts at /installed/{appId} and the chat
+  // config carries the appId so the per-session / IndexedDB paths light up.
+  describe('Installed app session isolation', () => {
+    const flushTimers = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    beforeEach(() => {
+      vi.mocked(usePathname).mockReturnValue('/installed/app-installed')
+    })
+
+    it('should preserve chatTree when switching between draft sessions', async () => {
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:one' } },
+      )
+
+      act(() => {
+        result.current.handleSend('test-url', { query: 'hello from A' }, {})
+      })
+      act(() => {
+        callbacks.onData('A answer', true, {
+          messageId: 'm-a',
+          conversationId: 'c-a',
+          taskId: 't-a',
+        })
+      })
+      // getThreadMessages emits [question, answer] for the root QA.
+      expect(result.current.chatList).toHaveLength(2)
+      const answerA = result.current.chatList.find((item) => item.content === 'A answer')
+      expect(answerA).toBeDefined()
+
+      // Switch to a different draft; the previous tree must not bleed over.
+      rerender({ sessionId: 'draft:two' })
+      expect(result.current.chatList).toHaveLength(0)
+
+      // Switch back to draft:one and confirm the previous answer is restored.
+      rerender({ sessionId: 'draft:one' })
+      expect(result.current.chatList).toHaveLength(2)
+      expect(
+        result.current.chatList.some((item) => item.content === 'A answer'),
+      ).toBe(true)
+    })
+
+    it('should pass the originating session id to onConversationStarted when stream returns', async () => {
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+
+      const onConversationStarted = vi.fn()
+      const { result } = renderHook(() =>
+        useChat(
+          { appId: 'app-installed' } as ChatConfig,
+          undefined,
+          [],
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { sessionId: 'draft:alpha' },
+        ),
+      )
+
+      act(() => {
+        result.current.handleSend(
+          'test-url',
+          { query: 'send from alpha' },
+          { onConversationStarted },
+        )
+      })
+      act(() => {
+        callbacks.onData('first chunk', true, {
+          messageId: 'm-1',
+          conversationId: 'real-alpha',
+          taskId: 't-1',
+        })
+      })
+
+      expect(onConversationStarted).toHaveBeenCalledWith('real-alpha', 'draft:alpha')
+    })
+
+    it('should clear only the active session snapshot when handleStop is called', async () => {
+      const { clearInstalledChatRecovery } = await import('../../installed-chat-recovery')
+      const clearSpy = vi.mocked(clearInstalledChatRecovery)
+      clearSpy.mockClear()
+
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'conv-active' } },
+      )
+
+      // First stop clears the active conversation's snapshot.
+      act(() => {
+        result.current.handleStop()
+      })
+      const firstCallIds = clearSpy.mock.calls.map(([, id]) => id)
+      expect(firstCallIds).toContain('conv-active')
+
+      clearSpy.mockClear()
+      // Switching to a sibling session and stopping must target the new
+      // active session, not the previous one.
+      rerender({ sessionId: 'conv-other' })
+      act(() => {
+        result.current.handleStop()
+      })
+      const clearedIds = clearSpy.mock.calls.map(([, id]) => id)
+      expect(clearedIds).toContain('conv-other')
+      expect(clearedIds).not.toContain('conv-active')
     })
   })
 })

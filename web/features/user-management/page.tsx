@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import Loading from '@/app/components/base/loading'
 import { useRouter } from '@/next/navigation'
 import { del, get, post, put } from '@/service/base'
+import { parseErrorMessage } from '@/utils/error-parser'
 
 type PreviewRow = {
   email: string
@@ -42,6 +43,7 @@ const UserManagementPage = () => {
   const [emailFilter, setEmailFilter] = useState('')
   const [workspaceFilter, setWorkspaceFilter] = useState('')
   const [selectedDetails, setSelectedDetails] = useState<PreviewRow | null>(null)
+  const [selectedFileName, setSelectedFileName] = useState('')
   const accessQuery = useQuery({
     queryKey: ['user-management', 'access'],
     queryFn: () => get<{ enabled: boolean }>('/user-management/access', {}, { silent: true }),
@@ -84,7 +86,7 @@ const UserManagementPage = () => {
       setPreview(response)
       setResults([])
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -101,7 +103,7 @@ const UserManagementPage = () => {
       setResults(response.results)
       await assignmentsQuery.refetch()
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -130,7 +132,7 @@ const UserManagementPage = () => {
       setManualWorkspaceId('')
       await assignmentsQuery.refetch()
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -175,7 +177,7 @@ const UserManagementPage = () => {
     try {
       await downloadBlob('/user-management/assignments/export', 'workspace-assignments.xlsx')
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     }
   }
 
@@ -188,7 +190,7 @@ const UserManagementPage = () => {
           : 'workspace-assignment-template.xlsx',
       )
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     }
   }
 
@@ -202,7 +204,7 @@ const UserManagementPage = () => {
       })
       await assignmentsQuery.refetch()
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     } finally {
       setUpdatingAssignment(null)
     }
@@ -220,7 +222,7 @@ const UserManagementPage = () => {
       await del(`/user-management/assignments/${encodeURIComponent(row.assignment_id)}`)
       await assignmentsQuery.refetch()
     } catch (err) {
-      setError(String(err))
+      setError(await parseErrorMessage(err))
     } finally {
       setUpdatingAssignment(null)
     }
@@ -229,15 +231,15 @@ const UserManagementPage = () => {
   return (
     <main className="mx-auto flex h-full w-full max-w-5xl flex-col gap-6 overflow-y-auto p-8">
       <header>
-        <h1 className="title-2xl-semi-bold text-text-primary">用户管理</h1>
+        <h1 className="title-2xl-semi-bold text-text-primary">{t(($) => $['userManagement.title'], { ns: 'common' })}</h1>
         <p className="mt-1 body-sm-regular text-text-tertiary">
-          批量邀请成员、预分配工作空间并查看处理结果
+          {t(($) => $['userManagement.description'], { ns: 'common' })}
         </p>
       </header>
       <section className="rounded-xl border border-divider-subtle bg-background-section p-5">
         <div className="mb-4 flex items-center gap-3">
           <label className="body-sm-medium text-text-secondary" htmlFor="operation">
-            操作类型
+            {t(($) => $['userManagement.operationType'], { ns: 'common' })}
           </label>
           <select
             id="operation"
@@ -245,56 +247,66 @@ const UserManagementPage = () => {
             value={operation}
             onChange={(event) => setOperation(event.target.value as 'invite' | 'assign')}
           >
-            <option value="assign">工作空间分配</option>
-            <option value="invite">批量邀请团队成员</option>
+            <option value="assign">{t(($) => $['userManagement.workspaceAssignment'], { ns: 'common' })}</option>
+            <option value="invite">{t(($) => $['userManagement.batchInvite'], { ns: 'common' })}</option>
           </select>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="secondary" onClick={() => void downloadTemplate()}>
-              下载示例 Excel
+              {t(($) => $['userManagement.downloadTemplate'], { ns: 'common' })}
             </Button>
-            <input
-              type="file"
-              accept=".xlsx,.xlsm"
-              disabled={loading}
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) void previewFile(file)
-              }}
-            />
+            <label
+              className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-divider-regular bg-background-default px-3 py-2 text-sm ${loading ? 'cursor-not-allowed opacity-50' : ''}`}
+            >
+              <span>{t(($) => $['userManagement.chooseFile'], { ns: 'common' })}</span>
+              <input
+                className="sr-only"
+                type="file"
+                accept=".xlsx,.xlsm"
+                disabled={loading}
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  setSelectedFileName(file?.name || '')
+                  if (file) void previewFile(file)
+                }}
+              />
+            </label>
+            <span className="max-w-60 truncate text-sm text-text-tertiary">
+              {selectedFileName || t(($) => $['userManagement.noFileChosen'], { ns: 'common' })}
+            </span>
           </div>
         </div>
         <p className="body-xs-regular text-text-tertiary">
           {operation === 'assign'
-            ? 'Excel 列：用户邮箱、工作空间名称、工作空间 ID（可选）、工作空间角色'
-            : 'Excel 列：邮箱、角色'}
+            ? t(($) => $['userManagement.excelAssignmentColumns'], { ns: 'common' })
+            : t(($) => $['userManagement.excelInviteColumns'], { ns: 'common' })}
         </p>
       </section>
       <section className="rounded-xl border border-divider-subtle bg-background-section p-5">
-        <h2 className="mb-3 system-md-semibold text-text-secondary">手动分配工作空间</h2>
+        <h2 className="mb-3 system-md-semibold text-text-secondary">{t(($) => $['userManagement.manualAssignment'], { ns: 'common' })}</h2>
         <div className="flex flex-wrap gap-3">
           <input
-            aria-label="用户邮箱"
+            aria-label={t(($) => $['userManagement.email'], { ns: 'common' })}
             className="min-w-60 rounded-lg border border-divider-regular px-3 py-2"
-            placeholder="用户邮箱"
+            placeholder={t(($) => $['userManagement.email'], { ns: 'common' })}
             value={manualEmail}
             onChange={(event) => setManualEmail(event.target.value)}
           />
           <input
-            aria-label="工作空间名称"
+            aria-label={t(($) => $['userManagement.workspace'], { ns: 'common' })}
             className="min-w-60 rounded-lg border border-divider-regular px-3 py-2"
-            placeholder="工作空间名称（可选）"
+            placeholder={t(($) => $['userManagement.workspaceNameOptional'], { ns: 'common' })}
             value={manualWorkspace}
             onChange={(event) => setManualWorkspace(event.target.value)}
           />
           <input
-            aria-label="工作空间 ID"
+            aria-label={t(($) => $['userManagement.workspaceId'], { ns: 'common' })}
             className="min-w-60 rounded-lg border border-divider-regular px-3 py-2"
-            placeholder="工作空间 ID（可选）"
+            placeholder={t(($) => $['userManagement.workspaceIdOptional'], { ns: 'common' })}
             value={manualWorkspaceId}
             onChange={(event) => setManualWorkspaceId(event.target.value)}
           />
           <select
-            aria-label="工作空间角色"
+            aria-label={t(($) => $['userManagement.workspaceRole'], { ns: 'common' })}
             className="rounded-lg border border-divider-regular px-3 py-2"
             value={manualRole}
             onChange={(event) => setManualRole(event.target.value)}
@@ -311,7 +323,7 @@ const UserManagementPage = () => {
             disabled={!manualWorkspace.trim() && !manualWorkspaceId.trim()}
             onClick={() => void assignManually()}
           >
-            分配
+            {t(($) => $['userManagement.assign'], { ns: 'common' })}
           </Button>
         </div>
       </section>
@@ -327,21 +339,21 @@ const UserManagementPage = () => {
         <section className="rounded-xl border border-divider-subtle bg-background-section p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="body-sm-medium text-text-secondary">
-              预览：{preview.total} 行，错误 {preview.errors.length} 行
+              {t(($) => $['userManagement.preview'], { ns: 'common', total: preview.total, errors: preview.errors.length })}
             </div>
             <Button variant="primary" loading={loading} onClick={() => void confirm()}>
-              确认导入
+              {t(($) => $['userManagement.confirmImport'], { ns: 'common' })}
             </Button>
           </div>
           <div className="max-h-80 overflow-auto">
             <table className="w-full text-left body-xs-regular">
               <thead>
                 <tr>
-                  <th className="p-2">邮箱</th>
-                  <th className="p-2">工作空间</th>
-                  <th className="p-2">工作空间 ID</th>
-                  <th className="p-2">角色</th>
-                  <th className="p-2">原因</th>
+                  <th className="p-2">{t(($) => $['userManagement.email'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.workspace'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.workspaceId'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.role'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.reason'], { ns: 'common' })}</th>
                 </tr>
               </thead>
               <tbody>
@@ -362,19 +374,19 @@ const UserManagementPage = () => {
       {results.length > 0 && (
         <section className="rounded-xl border border-divider-subtle bg-background-section p-5">
           <div className="mb-4 flex items-center justify-between">
-            <div className="body-sm-medium text-text-secondary">处理结果：{results.length} 行</div>
+            <div className="body-sm-medium text-text-secondary">{t(($) => $['userManagement.processingResults'], { ns: 'common', count: results.length })}</div>
             <Button variant="secondary" onClick={() => void downloadFailed()}>
-              下载失败记录
+              {t(($) => $['userManagement.downloadFailed'], { ns: 'common' })}
             </Button>
           </div>
           <div className="max-h-96 overflow-auto">
             <table className="w-full text-left body-xs-regular">
               <thead>
                 <tr>
-                  <th className="p-2">邮箱</th>
-                  <th className="p-2">工作空间</th>
-                  <th className="p-2">状态</th>
-                  <th className="p-2">原因</th>
+                  <th className="p-2">{t(($) => $['userManagement.email'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.workspace'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.reason'], { ns: 'common' })}</th>
+                  <th className="p-2">{t(($) => $['userManagement.status'], { ns: 'common' })}</th>
                 </tr>
               </thead>
               <tbody>
@@ -393,23 +405,23 @@ const UserManagementPage = () => {
       )}
       <section className="rounded-xl border border-divider-subtle bg-background-section p-5">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="system-md-semibold text-text-secondary">用户与工作空间分配情况</h2>
+          <h2 className="system-md-semibold text-text-secondary">{t(($) => $['userManagement.assignmentStatus'], { ns: 'common' })}</h2>
           <Button variant="secondary" onClick={() => void downloadAssignments()}>
-            导出全部
+            {t(($) => $['userManagement.exportAll'], { ns: 'common' })}
           </Button>
         </div>
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <input
-            aria-label="搜索用户邮箱"
+            aria-label={t(($) => $['userManagement.searchEmail'], { ns: 'common' })}
             className="min-w-60 rounded-lg border border-divider-regular px-3 py-2"
-            placeholder="搜索用户邮箱"
+            placeholder={t(($) => $['userManagement.searchEmail'], { ns: 'common' })}
             value={emailFilter}
             onChange={(event) => setEmailFilter(event.target.value)}
           />
           <input
-            aria-label="搜索工作空间"
+            aria-label={t(($) => $['userManagement.searchWorkspace'], { ns: 'common' })}
             className="min-w-60 rounded-lg border border-divider-regular px-3 py-2"
-            placeholder="搜索工作空间"
+            placeholder={t(($) => $['userManagement.searchWorkspace'], { ns: 'common' })}
             value={workspaceFilter}
             onChange={(event) => setWorkspaceFilter(event.target.value)}
           />
@@ -421,24 +433,24 @@ const UserManagementPage = () => {
                 setWorkspaceFilter('')
               }}
             >
-              清除搜索
+              {t(($) => $['userManagement.clearSearch'], { ns: 'common' })}
             </Button>
           )}
           {assignmentsQuery.isFetching && (
-            <span className="body-xs-regular text-text-tertiary">正在刷新…</span>
+            <span className="body-xs-regular text-text-tertiary">{t(($) => $['userManagement.refreshing'], { ns: 'common' })}</span>
           )}
         </div>
         <div className="max-h-96 overflow-auto">
           <table className="w-full text-left body-xs-regular">
             <thead>
               <tr>
-                <th className="p-2">用户邮箱</th>
-                <th className="p-2">用户 ID</th>
-                <th className="p-2">工作空间</th>
-                <th className="p-2">工作空间 ID</th>
-                <th className="p-2">角色</th>
-                <th className="p-2">状态</th>
-                <th className="p-2">操作</th>
+                <th className="p-2">{t(($) => $['userManagement.email'], { ns: 'common' })}</th>
+                <th className="p-2">{t(($) => $['userManagement.userId'], { ns: 'common' })}</th>
+                <th className="p-2">{t(($) => $['userManagement.workspace'], { ns: 'common' })}</th>
+                <th className="p-2">{t(($) => $['userManagement.workspaceId'], { ns: 'common' })}</th>
+                <th className="p-2">{t(($) => $['userManagement.role'], { ns: 'common' })}</th>
+                <th className="p-2">{t(($) => $['userManagement.status'], { ns: 'common' })}</th>
+                <th className="p-2">{t(($) => $['userManagement.actions'], { ns: 'common' })}</th>
               </tr>
             </thead>
             <tbody>
@@ -477,7 +489,7 @@ const UserManagementPage = () => {
                       size="small"
                       onClick={() => setSelectedDetails(row)}
                     >
-                      查看详情
+                      {t(($) => $['userManagement.viewDetails'], { ns: 'common' })}
                     </Button>
                     <Button
                       variant="secondary"
@@ -485,7 +497,7 @@ const UserManagementPage = () => {
                       disabled={!row.assignment_id || updatingAssignment === row.assignment_id}
                       onClick={() => void removeAssignment(row)}
                     >
-                      移除
+                      {t(($) => $['userManagement.remove'], { ns: 'common' })}
                     </Button>
                   </td>
                 </tr>
@@ -509,43 +521,43 @@ const UserManagementPage = () => {
           >
             <div className="mb-4 flex items-center justify-between">
               <h2 id="assignment-details-title" className="system-md-semibold text-text-primary">
-                工作空间分配详情
+                {t(($) => $['userManagement.details'], { ns: 'common' })}
               </h2>
               <button
                 type="button"
                 className="text-text-tertiary"
-                aria-label="关闭详情"
+                aria-label={t(($) => $['userManagement.closeDetails'], { ns: 'common' })}
                 onClick={() => setSelectedDetails(null)}
               >
                 ×
               </button>
             </div>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 body-sm-regular">
-              <dt className="text-text-tertiary">工作空间名称</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.workspaceNameOptional'], { ns: 'common' })}</dt>
               <dd className="text-text-primary">{selectedDetails.workspace_name || '-'}</dd>
-              <dt className="text-text-tertiary">工作空间 ID</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.workspaceId'], { ns: 'common' })}</dt>
               <dd className="font-mono break-all text-text-primary">
                 {selectedDetails.workspace_id || '-'}
               </dd>
-              <dt className="text-text-tertiary">用户邮箱</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.email'], { ns: 'common' })}</dt>
               <dd className="break-all text-text-primary">{selectedDetails.email}</dd>
-              <dt className="text-text-tertiary">用户 ID</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.userId'], { ns: 'common' })}</dt>
               <dd className="font-mono break-all text-text-primary">
                 {selectedDetails.user_id || selectedDetails.account_id || '-'}
               </dd>
-              <dt className="text-text-tertiary">分配记录 ID</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.assignmentId'], { ns: 'common' })}</dt>
               <dd className="font-mono break-all text-text-primary">
                 {selectedDetails.assignment_id || '-'}
               </dd>
-              <dt className="text-text-tertiary">角色</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.role'], { ns: 'common' })}</dt>
               <dd className="text-text-primary">{selectedDetails.role}</dd>
-              <dt className="text-text-tertiary">当前工作空间</dt>
-              <dd className="text-text-primary">{selectedDetails.current ? '是' : '否'}</dd>
-              <dt className="text-text-tertiary">状态</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.currentWorkspace'], { ns: 'common' })}</dt>
+              <dd className="text-text-primary">{selectedDetails.current ? t(($) => $['userManagement.yes'], { ns: 'common' }) : t(($) => $['userManagement.no'], { ns: 'common' })}</dd>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.status'], { ns: 'common' })}</dt>
               <dd className="text-text-primary">
                 {selectedDetails.reason || selectedDetails.status || 'assigned'}
               </dd>
-              <dt className="text-text-tertiary">最后打开时间</dt>
+              <dt className="text-text-tertiary">{t(($) => $['userManagement.lastOpened'], { ns: 'common' })}</dt>
               <dd className="text-text-primary">{selectedDetails.last_opened_at || '-'}</dd>
             </dl>
           </section>

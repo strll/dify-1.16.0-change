@@ -23,8 +23,8 @@ from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 from controllers.common.session import with_session
 from controllers.console import console_ns
 from controllers.console.wraps import account_initialization_required, setup_required, with_current_user
-from extensions.ext_database import db
 from core.db.session_factory import session_factory
+from extensions.ext_database import db
 from libs.helper import EmailStr
 from libs.login import login_required
 from models.account import Account, AccountStatus, Tenant, TenantAccountJoin, TenantAccountRole
@@ -614,9 +614,8 @@ class UserManagementAssignmentsApi(Resource):
             .join(TenantAccountJoin, TenantAccountJoin.account_id == Account.id)
             .join(Tenant, Tenant.id == TenantAccountJoin.tenant_id)
         )
-        for account_id, account_email, tenant_name, tenant_id, join_id, role, current, last_opened_at in session.execute(
-            live_stmt
-        ).all():
+        live_rows = session.execute(live_stmt).all()
+        for account_id, account_email, tenant_name, tenant_id, join_id, role, current, last_opened_at in live_rows:
             if email and email not in normalize_email(account_email):
                 continue
             if workspace_name and workspace_name not in tenant_name:
@@ -782,9 +781,9 @@ class UserManagementAssignmentMutationApi(Resource):
             except NoPermissionError:
                 # The dedicated user-management permission is global, while
                 # Dify's native service only allows workspace admins to
-                # remove members.  For a globally authorized operator,
-                # remove the membership directly after retaining the native
-                # self-removal and sole-owner safeguards.
+                # remove members. For a globally authorized operator, remove
+                # non-owner memberships directly. Owner memberships remain
+                # protected regardless of whether another owner exists.
                 if membership_role := session.scalar(
                     select(TenantAccountJoin.role).where(
                         TenantAccountJoin.tenant_id == tenant.id,
@@ -792,15 +791,7 @@ class UserManagementAssignmentMutationApi(Resource):
                     )
                 ):
                     if membership_role == TenantAccountRole.OWNER:
-                        other_owner = session.scalar(
-                            select(TenantAccountJoin.id).where(
-                                TenantAccountJoin.tenant_id == tenant.id,
-                                TenantAccountJoin.role == TenantAccountRole.OWNER,
-                                TenantAccountJoin.account_id != account.id,
-                            )
-                        )
-                        if other_owner is None:
-                            raise BadRequest("不能移除工作空间唯一的 Owner")
+                        raise BadRequest("不能移除工作空间 Owner")
                     session.execute(
                         TenantAccountJoin.__table__.delete().where(
                             TenantAccountJoin.tenant_id == tenant.id,
