@@ -88,6 +88,66 @@ Please refer to our [FAQ](https://docs.dify.ai/getting-started/install-self-host
 
 > If you'd like to contribute to Dify or do additional development, refer to our [guide to deploying from source code](https://docs.dify.ai/getting-started/install-self-hosted/local-source-code)
 
+## Dify 1.16.0 定制内容
+
+本项目基于 Dify 1.16.0，增加了用户与工作空间管理功能，以及 `/installed`
+Web App 的多会话和工作流恢复功能。修改保持 1.16.0 的接口兼容性，不新增或修改数据库表结构。
+
+### 用户与工作空间管理
+
+- 用户与工作空间分配支持工作空间 ID。列表中显示缩短后的 ID，详情按钮可以查看完整工作空间 ID、用户 ID 和分配关系。
+- 手动分配工作空间增加可选的工作空间 ID。填写 ID 时按 ID 查询和分配；原有按名称分配的方式继续可用。
+- 批量 Excel 模板和导入逻辑支持可选的工作空间 ID 列。
+- 用户管理界面支持中文和英文切换，包括手动分配、批量分配、详情和状态提示。角色值保留原有显示方式。
+- 修复新增工作空间和批量分配的事务边界。某一行失败后不会继续使用已失败的 SQLAlchemy 事务，也不会留下不完整的写入结果。重复工作空间和重复成员关系会返回明确结果。
+- 移除成员时只保护目标成员角色为 `owner` 的情况。目标成员不是 `owner` 时可以移除，包括移除当前登录账号的非 owner 关系。没有 owner 的历史工作空间也可以正常处理非 owner 成员移除。
+- 统一前端 HTTP 错误解析，显示后端实际错误信息，避免出现 `[object Response]`，并保留各模块原有的错误处理行为。
+
+### `/installed` Web App 多会话
+
+`/installed` 页面支持工作流执行期间创建和切换多个独立会话：
+
+- 可以创建和切换多个新的对话草稿。
+- 第一条消息返回真实的 `conversation_id` 后，草稿会替换为服务端会话，并清理重复的草稿记录。
+- 刷新页面或关闭浏览器后不恢复空白草稿；已经写入服务端的会话仍会保留在历史列表中。
+- 切换会话不会停止正在执行的工作流。切回会话或刷新页面后，通过现有的工作流恢复和 SSE 逻辑恢复消息及执行状态。
+- 恢复快照保存在浏览器本地 IndexedDB 中。工作流完成后清理本地恢复缓存，不删除服务端正常会话历史。
+- 多个浏览器标签页之间同步历史会话的新建和删除。
+- 删除当前历史会话后清空当前视图，不自动生成意外的“新对话”。
+- 这些会话修改只作用于 `/installed`，普通 Web App、嵌入式聊天和其他 Dify 聊天页面保持原有行为。
+
+### 测试与 Docker 镜像
+
+最近一次针对安装版聊天功能的前端测试共通过 **229 个测试**，覆盖聊天 Hook、历史会话 Hook 和聊天包装组件。前端生产构建（包括 Vinext 构建）已在创建镜像前完成。
+
+已验证的定制镜像如下：
+
+| 服务 | 镜像 |
+| --- | --- |
+| 前端 `web` | `dify-web-custom:1.16.0-sessionfix4` |
+| 后端 `api`、`worker`、`worker_beat`、`api_websocket` | `dify-api-custom:1.16.0-sessionfix3` |
+
+后端四个服务必须使用同一个后端镜像。前端使用相对 API 地址，保持
+`CONSOLE_API_URL` 和 `APP_API_URL` 为空，并通过现有 Nginx 代理访问后端：
+
+- `/` -> `web:3000`
+- `/console/api`、`/api`、`/v1`、`/files` -> `api:5001`
+
+镜像覆盖文件是
+[`docker/docker-compose.custom-1.16.0.yaml`](docker/docker-compose.custom-1.16.0.yaml)。加载两个独立镜像包后，与基础 Compose 文件一起启动：
+
+```bash
+docker load -i dify-api-custom-1.16.0-sessionfix3.tar
+docker load -i dify-web-custom-1.16.0-sessionfix4.tar
+docker compose -p dify1160-custom \
+  -f docker/docker-compose.yaml \
+  -f docker/docker-compose.custom-1.16.0.yaml \
+  up -d api worker worker_beat api_websocket web
+```
+
+部署时不要执行 `docker compose down -v`，否则会删除 Dify 的持久化数据。本项目定制功能的智能体说明位于
+[`.agents/skills/dify-1160-customization`](.agents/skills/dify-1160-customization)。
+
 ## Key features
 
 **1. Workflow**:
