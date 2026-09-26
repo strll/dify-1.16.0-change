@@ -26,7 +26,6 @@ import { TransferMethod } from '@/types/app'
 import { formatBooleanInputs } from '@/utils/model-config'
 import Chat from '../chat'
 import { useChat } from '../chat/hooks'
-import { promoteInstalledChatRecovery } from '../installed-chat-recovery'
 import { getLastAnswer, isValidGeneratedAnswer } from '../utils'
 import { useChatWithHistoryContext } from './context'
 import { isDraftConversationId } from './hooks'
@@ -98,7 +97,6 @@ const ChatWrapper = () => {
     handleSwitchSibling,
     isResponding: respondingState,
     suggestedQuestions,
-    recoverySessionId,
   } = useChat(
     appConfig,
     {
@@ -169,15 +167,12 @@ const ChatWrapper = () => {
   const handleConversationComplete = useCallback(
     (conversationId: string, _workflowRunId?: string, sessionId?: string) => {
       // A workflow may finish after the user has switched to another chat.
-      // Keep its history/recovery data, but do not navigate the visible chat away.
-      if (sessionId && sessionId !== currentConversationId) return
-      if (isInstalledApp && appId)
-        void promoteInstalledChatRecovery(appId, recoverySessionId, conversationId).catch(
-          () => undefined,
-        )
-      handleNewConversationCompleted(conversationId)
+      // The stream itself deletes its own backend draft; here we just update
+      // the visible chat state.
+      if (sessionId) handleNewConversationCompleted(conversationId, sessionId)
+      else handleNewConversationCompleted(conversationId)
     },
-    [appId, currentConversationId, handleNewConversationCompleted, isInstalledApp, recoverySessionId],
+    [handleNewConversationCompleted],
   )
 
   useEffect(() => {
@@ -224,7 +219,15 @@ const ChatWrapper = () => {
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
     }
-  }, [appId, appSourceType, chatList, currentConversationId, handleConversationComplete, handleConversationStarted, handleSwitchSibling])
+  }, [
+    appId,
+    appSourceType,
+    chatList,
+    currentConversationId,
+    handleConversationComplete,
+    handleConversationStarted,
+    handleSwitchSibling,
+  ])
 
   const [hasSent, setHasSent] = useState(false)
   const [prevConversationId, setPrevConversationId] = useState(currentConversationId)
@@ -251,7 +254,7 @@ const ChatWrapper = () => {
         onGetConversationMessages: isNewAgent
           ? (conversationId) => fetchChatList(conversationId, appSourceType, appId)
           : undefined,
-      onGetSuggestedQuestions: (responseItemId) =>
+        onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
         onConversationStarted: handleConversationStarted,
         onConversationComplete: isHistoryConversation ? undefined : handleConversationComplete,

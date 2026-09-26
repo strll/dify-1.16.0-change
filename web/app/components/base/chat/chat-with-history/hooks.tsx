@@ -32,10 +32,6 @@ import {
   useShareConversations,
 } from '@/service/use-share'
 import { TransferMethod } from '@/types/app'
-import {
-  publishConversationSyncEvent,
-  subscribeConversationSyncEvents,
-} from './conversation-sync'
 import { addFileInfos, sortAgentSorts } from '../../../tools/utils'
 import { enrichSubmittedHumanInputFormData } from '../chat/answer/human-input-content/submitted-utils'
 import {
@@ -44,6 +40,11 @@ import {
   getRawInputsFromUrlParams,
   getRawUserVariablesFromUrlParams,
 } from '../utils'
+import { publishConversationSyncEvent, subscribeConversationSyncEvents } from './conversation-sync'
+import {
+  deleteInstalledAppChatDraft,
+  listInstalledAppChatDrafts,
+} from '@/service/installed-app-chat-drafts'
 
 export const isDraftConversationId = (conversationId: string) => conversationId.startsWith('draft:')
 
@@ -217,17 +218,17 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     },
     [appId, conversationIdInfo, setConversationIdInfo, userId],
   )
-  const draftHydrationCheckedRef = useRef(false)
+  // Draft placeholders are session-only; on every reload we pull the
+  // in-flight drafts from the backend and surface them as conversation-list
+  // items so the user sees their active conversations again. localStorage is
+  // cleared of any persisted draft so the visible selection always points at
+  // a real conversation that still exists server-side.
+  const draftsHydratedRef = useRef(false)
   useEffect(() => {
-    // Draft IDs are intentionally session-only and must never survive a reload.
-    // userId loads asynchronously via getProcessedSystemVariablesFromUrlParams,
-    // so we cannot rely on the targeted keyPath. Scan every per-user entry and
-    // clear any draft value to ensure stale placeholders do not resurrect.
-    if (draftHydrationCheckedRef.current) return
-    if (!appId || !conversationIdInfo) return
+    if (!appId || !conversationIdInfo || draftsHydratedRef.current) return
     const perApp = conversationIdInfo[appId]
     if (!perApp) {
-      draftHydrationCheckedRef.current = true
+      draftsHydratedRef.current = true
       return
     }
     let mutated = false
@@ -240,16 +241,37 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
         nextPerApp[key] = value
       }
     }
-    if (!mutated) {
-      draftHydrationCheckedRef.current = true
-      return
+    if (mutated) {
+      setConversationIdInfo({ ...conversationIdInfo, [appId]: nextPerApp })
     }
-    setConversationIdInfo({
-      ...conversationIdInfo,
-      [appId]: nextPerApp,
-    })
-    draftHydrationCheckedRef.current = true
+    draftsHydratedRef.current = true
   }, [appId, conversationIdInfo, setConversationIdInfo])
+  useEffect(() => {
+    if (!isInstalledApp || !appId || !draftsHydratedRef.current) return
+    let cancelled = false
+    void listInstalledAppChatDrafts(appId)
+      .then((response) => {
+        if (cancelled || !response?.data) return
+        setOriginConversationList((current) => {
+          const existingIds = new Set(current.map(item => item.id))
+          const merged = [...current]
+          for (const draft of response.data) {
+            if (existingIds.has(draft.draft_id)) continue
+            merged.unshift({
+              id: draft.draft_id,
+              name: draft.title || '',
+              inputs: {},
+              introduction: '',
+            })
+          }
+          return merged
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [appId, isInstalledApp])
   const [newConversationId, setNewConversationId] = useState('')
   const chatShouldReloadKey = useMemo(() => {
     if (currentServerConversationId === newConversationId) return ''
@@ -708,20 +730,35 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   )
   const handleConversationStarted = useCallback(
     (conversationId: string, sessionId?: string) => {
+      // Ignore malformed lifecycle callbacks. A blank ID must never become a
+      // visible history item or overwrite the selected conversation.
+      if (!conversationId) return
+
       // Prefer the session the stream was started from (the draft placeholder)
-      // so we always remove exactly that one. Fall back to the current view
-      // only when the caller could not provide the originating session id.
+      // so we always remove exactly that one. The originating key may be the
+      // draft itself OR an already-resolved alias to a real conversation id.
+      // We trust the caller (useChat) to forward the right key.
       const draftSessionId = sessionId
-        ? (isDraftConversationId(sessionId) ? sessionId : '')
-        : (isDraftConversationId(currentConversationId) ? currentConversationId : '')
-      setNewConversationId(conversationId)
+        ? (isDraftConversationId(sessionId)
+            ? sessionId
+            : // If the caller passed an aliased real id, leave the cleanup to
+              // the reverse-lookup path inside useChat which removes the
+              // draft via the sessionAliasesRef.
+              '')
+        : isDraftConversationId(currentConversationId)
+          ? currentConversationId
+          : ''
+      const isActiveSession = !sessionId || sessionId === currentConversationId
+      if (isActiveSession) setNewConversationId(conversationId)
       if (draftSessionId)
         setDraftConversationIds((current) => current.filter((id) => id !== draftSessionId))
-      // Persist the real ID as soon as the first SSE event arrives. Keep a
-      // background conversation from changing the visible selection after the
-      // user has switched to another chat.
-      if (!sessionId || sessionId === currentConversationId)
-        handleConversationIdInfoChange(conversationId)
+      // The draft row on the backend is now superseded by the real
+      // conversation. chat/hooks.ts will fire the actual DELETE, but we also
+      // issue one from here as a safety net for streams that never call
+      // back into this hook (e.g. fast-reload cases).
+      if (isInstalledApp && appId && draftSessionId)
+        void deleteInstalledAppChatDraft(appId, draftSessionId).catch(() => undefined)
+      if (isActiveSession) handleConversationIdInfoChange(conversationId)
       setOriginConversationList((current) => {
         if (current.some((item) => item.id === conversationId)) return current
         return [
@@ -736,17 +773,31 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       })
       if (appId) publishConversationSyncEvent({ type: 'created', appId, conversationId })
     },
-    [appId, currentConversationId, handleConversationIdInfoChange, t],
+    [
+      appId,
+      currentConversationId,
+      handleConversationIdInfoChange,
+      isInstalledApp,
+      t,
+    ],
   )
   const handleNewConversationCompleted = useCallback(
-    (newConversationId: string) => {
-      handleConversationStarted(newConversationId)
-      setNewConversationId(newConversationId)
-      handleConversationIdInfoChange(newConversationId)
-      setShowNewConversationItemInList(false)
+    (newConversationId: string, sessionId?: string) => {
+      const isActiveSession = !sessionId || sessionId === currentConversationId
+      handleConversationStarted(newConversationId, sessionId)
+      if (isActiveSession) {
+        setNewConversationId(newConversationId)
+        handleConversationIdInfoChange(newConversationId)
+        setShowNewConversationItemInList(false)
+      }
       invalidateShareConversations()
     },
-    [handleConversationIdInfoChange, handleConversationStarted, invalidateShareConversations],
+    [
+      currentConversationId,
+      handleConversationIdInfoChange,
+      handleConversationStarted,
+      invalidateShareConversations,
+    ],
   )
   const handleFeedback = useCallback(
     async (messageId: string, feedback: Feedback) => {

@@ -536,7 +536,9 @@ describe('useChatWithHistory', () => {
       await waitFor(() => {
         expect(result!.current.clearChatList).toBe(true)
       })
-      expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(false)
+      expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(
+        false,
+      )
     })
 
     it('should remove a deleted draft without creating a replacement draft', async () => {
@@ -548,7 +550,11 @@ describe('useChatWithHistory', () => {
       await act(async () => {
         await result!.current.handleNewConversation()
       })
-      await waitFor(() => expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(true))
+      await waitFor(() =>
+        expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(
+          true,
+        ),
+      )
       const draftId = result!.current.currentConversationId
 
       await act(async () => {
@@ -556,7 +562,9 @@ describe('useChatWithHistory', () => {
       })
 
       expect(result!.current.currentConversationId).toBe('')
-      expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(false)
+      expect(result!.current.conversationList.some((item) => item.id.startsWith('draft:'))).toBe(
+        false,
+      )
     })
   })
 
@@ -2350,6 +2358,38 @@ describe('useChatWithHistory', () => {
       expect(ids).toContain(newerDraft)
     })
 
+    it('should remove a background draft when completion is the first callback', async () => {
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+
+      const { result } = await renderWithClient(() => useChatWithHistory())
+
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const olderDraft = result!.current.currentConversationId
+
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const newerDraft = result!.current.currentConversationId
+
+      // Some workflow streams expose the conversation ID only at completion.
+      // The completion callback must still remove the originating draft.
+      act(() => {
+        result!.current.handleNewConversationCompleted('conversation-real-older', olderDraft)
+      })
+
+      await waitFor(() => {
+        const ids = result!.current.conversationList.map((item) => item.id)
+        expect(ids).not.toContain(olderDraft)
+        expect(ids).toContain('conversation-real-older')
+        expect(ids).toContain(newerDraft)
+      })
+      expect(result!.current.currentConversationId).toBe(newerDraft)
+      expect(result!.current.newConversationId).toBe('')
+    })
+
     it('should fall back to currentConversationId when no sessionId is provided', async () => {
       mockFetchConversations.mockResolvedValue(createConversationData())
       mockFetchChatList.mockResolvedValue({ data: [] })
@@ -2377,7 +2417,7 @@ describe('useChatWithHistory', () => {
   // Scenario: stored draft IDs from a previous session must not be replayed
   // after the page is reloaded.
   describe('Draft hydration on mount', () => {
-    it('should clear a persisted draft id from localStorage on mount', async () => {
+    it('should not surface stale localStorage drafts to the conversation list', async () => {
       // Arrange: simulate a leftover draft id from a previous session.
       setConversationIdInfo('app-1', 'draft:leftover-from-old-session')
       mockFetchConversations.mockResolvedValue(createConversationData())
@@ -2386,7 +2426,8 @@ describe('useChatWithHistory', () => {
       // Act
       const { result } = await renderWithClient(() => useChatWithHistory())
 
-      // Assert: localStorage was cleared of the stale draft.
+      // Assert: localStorage was cleared of the stale draft so the visible
+      // selection does not point at a non-existent placeholder.
       await waitFor(() => {
         const stored = localStorage.getItem(CONVERSATION_ID_INFO)
         const parsed = stored ? JSON.parse(stored) : {}

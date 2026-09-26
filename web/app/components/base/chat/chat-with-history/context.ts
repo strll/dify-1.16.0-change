@@ -30,8 +30,8 @@ export type ChatWithHistoryContextValue = {
   handleDeleteConversation: (conversationId: string, callback: Callback) => void
   conversationRenaming: boolean
   handleRenameConversation: (conversationId: string, newName: string, callback: Callback) => void
-  handleNewConversationCompleted: (newConversationId: string) => void
-  handleConversationStarted: (conversationId: string) => void
+  handleNewConversationCompleted: (newConversationId: string, sessionId?: string) => void
+  handleConversationStarted: (conversationId: string, sessionId?: string) => void
   chatShouldReloadKey: string
   isMobile: boolean
   isInstalledApp: boolean

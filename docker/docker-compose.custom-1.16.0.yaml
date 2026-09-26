@@ -1,11 +1,120 @@
 services:
   api:
-    image: dify-api-custom:1.16.0-sessionfix3
+    build:
+      context: ..
+      dockerfile: .docker-build-context/api/Dockerfile
+    image: dify-api-custom:1.16.0-fable2
+    container_name: dify1160-custom-api-1
+    environment:
+      DB_HOST: db_postgres
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: difyai123456
+      DB_DATABASE: dify
+      DB_TYPE: postgresql
+      REDIS_HOST: dify1160-custom-redis-1
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: difyai123456
+      REDIS_DB: 0
+      VECTOR_STORE: weaviate
+      WEAVIATE_HOST: dify1160-custom-weaviate-1
+      WEAVIATE_PORT: 8080
+      WEAVIATE_GRPC_PORT: 50051
+    networks:
+      - dify1160-custom_default
+    external_links:
+      - dify1160-custom-db_postgres-1:db_postgres
+      - dify1160-custom-redis-1:redis
+      - dify1160-custom-weaviate-1:weaviate
   worker:
-    image: dify-api-custom:1.16.0-sessionfix3
+    build:
+      context: ..
+      dockerfile: .docker-build-context/api/Dockerfile
+    image: dify-api-custom:1.16.0-fable2
+    container_name: dify1160-custom-worker-1
+    environment:
+      DB_HOST: db_postgres
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: difyai123456
+      DB_DATABASE: dify
+      DB_TYPE: postgresql
+      REDIS_HOST: dify1160-custom-redis-1
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: difyai123456
+      REDIS_DB: 0
+      VECTOR_STORE: weaviate
+      WEAVIATE_HOST: dify1160-custom-weaviate-1
+      WEAVIATE_PORT: 8080
+      WEAVIATE_GRPC_PORT: 50051
+    networks:
+      - dify1160-custom_default
+    external_links:
+      - dify1160-custom-db_postgres-1:db_postgres
+      - dify1160-custom-redis-1:redis
+      - dify1160-custom-weaviate-1:weaviate
   worker_beat:
-    image: dify-api-custom:1.16.0-sessionfix3
+    build:
+      context: ..
+      dockerfile: .docker-build-context/api/Dockerfile
+    image: dify-api-custom:1.16.0-fable2
+    container_name: dify1160-custom-worker_beat-1
+    environment:
+      DB_HOST: db_postgres
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: difyai123456
+      DB_DATABASE: dify
+      DB_TYPE: postgresql
+      REDIS_HOST: dify1160-custom-redis-1
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: difyai123456
+      REDIS_DB: 0
+      VECTOR_STORE: weaviate
+      WEAVIATE_HOST: dify1160-custom-weaviate-1
+      WEAVIATE_PORT: 8080
+      WEAVIATE_GRPC_PORT: 50051
+    networks:
+      - dify1160-custom_default
+    external_links:
+      - dify1160-custom-db_postgres-1:db_postgres
+      - dify1160-custom-redis-1:redis
+      - dify1160-custom-weaviate-1:weaviate
   api_websocket:
-    image: dify-api-custom:1.16.0-sessionfix3
+    build:
+      context: ..
+      dockerfile: .docker-build-context/api/Dockerfile
+    image: dify-api-custom:1.16.0-fable2
+    container_name: dify1160-custom-api_websocket-1
+    environment:
+      DB_HOST: db_postgres
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: difyai123456
+      DB_DATABASE: dify
+      DB_TYPE: postgresql
+      REDIS_HOST: dify1160-custom-redis-1
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: difyai123456
+      REDIS_DB: 0
+      VECTOR_STORE: weaviate
+      WEAVIATE_HOST: dify1160-custom-weaviate-1
+      WEAVIATE_PORT: 8080
+      WEAVIATE_GRPC_PORT: 50051
+    networks:
+      - dify1160-custom_default
+    external_links:
+      - dify1160-custom-db_postgres-1:db_postgres
+      - dify1160-custom-redis-1:redis
+      - dify1160-custom-weaviate-1:weaviate
   web:
-    image: dify-web-custom:1.16.0-sessionfix4
+    image: dify-web-custom:1.16.0-fable2
+    container_name: dify1160-custom-web-1
+    environment:
+      HOSTNAME: 0.0.0.0
+    networks:
+      - dify1160-custom_default
+
+networks:
+  dify1160-custom_default:
+    external: true

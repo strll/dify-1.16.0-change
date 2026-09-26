@@ -121,6 +121,7 @@ from .datasets.rag_pipeline import (
 from .explore import (
     banner,
     installed_app,
+    installed_app_chat_draft,
     parameter,
     recommended_app,
     saved_message,
@@ -196,6 +197,7 @@ __all__ = [
     "human_input_form",
     "init_validate",
     "installed_app",
+    "installed_app_chat_draft",
     "load_balancing_config",
     "login",
     "mcp_server",

@@ -66,6 +66,7 @@ from .enums import (
 )
 from .execution_extra_content import ExecutionExtraContent, HumanInputContent
 from .human_input import HumanInputForm, HumanInputFormUploadFile, HumanInputFormUploadToken
+from .installed_app_chat_draft import InstalledAppChatDraft
 from .model import (
     AccountTrialAppRecord,
     ApiRequest,
@@ -223,6 +224,7 @@ __all__ = [
     "HumanInputFormUploadToken",
     "IconType",
     "InstalledApp",
+    "InstalledAppChatDraft",
     "InvitationCode",
     "LoadBalancingModelConfig",
     "Message",

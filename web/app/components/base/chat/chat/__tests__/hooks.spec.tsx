@@ -13,6 +13,7 @@ const useTimestampMock = vi.hoisted(() =>
 vi.mock('@/service/base', () => ({
   sseGet: vi.fn(),
   ssePost: vi.fn(),
+  del: vi.fn(),
 }))
 
 vi.mock('@/app/components/base/audio-btn/audio.player.manager', () => ({
@@ -44,12 +45,10 @@ vi.mock('@/next/navigation', () => ({
   useRouter: vi.fn(() => ({})),
 }))
 
-vi.mock('../../installed-chat-recovery', () => ({
-  saveInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
-  loadInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
-  clearInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
-  promoteInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
-  cleanupExpiredInstalledChatRecovery: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/service/installed-app-chat-drafts', () => ({
+  upsertInstalledAppChatDraft: vi.fn().mockResolvedValue({ result: 'success' }),
+  listInstalledAppChatDrafts: vi.fn().mockResolvedValue({ data: [] }),
+  deleteInstalledAppChatDraft: vi.fn().mockResolvedValue({ result: 'success' }),
 }))
 
 const createAbortControllerMock = () => {
@@ -721,7 +720,11 @@ describe('useChat', () => {
 
       expect(onGetConversationMessages).toHaveBeenCalled()
       expect(onGetSuggestedQuestions).toHaveBeenCalled()
-      expect(onConversationComplete).toHaveBeenCalledWith('c-1', 'workflow-run-from-history')
+      expect(onConversationComplete).toHaveBeenCalledWith(
+        'c-1',
+        'workflow-run-from-history',
+        '',
+      )
 
       const updatedResponse = result.current.chatList[1]
       expect(updatedResponse!.content).toBe('Updated answer from history') // Fetched from mock
@@ -3417,18 +3420,17 @@ describe('useChat', () => {
       // Switch back to draft:one and confirm the previous answer is restored.
       rerender({ sessionId: 'draft:one' })
       expect(result.current.chatList).toHaveLength(2)
-      expect(
-        result.current.chatList.some((item) => item.content === 'A answer'),
-      ).toBe(true)
+      expect(result.current.chatList.some((item) => item.content === 'A answer')).toBe(true)
     })
 
-    it('should pass the originating session id to onConversationStarted when stream returns', async () => {
+    it('should promote a draft when workflow_started is the first conversation event', async () => {
       let callbacks: HookCallbacks
       vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
         callbacks = options as HookCallbacks
       })
 
       const onConversationStarted = vi.fn()
+      const onConversationComplete = vi.fn()
       const { result } = renderHook(() =>
         useChat(
           { appId: 'app-installed' } as ChatConfig,
@@ -3438,32 +3440,43 @@ describe('useChat', () => {
           undefined,
           undefined,
           undefined,
-          { sessionId: 'draft:alpha' },
+          { sessionId: 'draft:workflow' },
         ),
       )
 
       act(() => {
         result.current.handleSend(
           'test-url',
-          { query: 'send from alpha' },
-          { onConversationStarted },
+          { query: 'workflow first event' },
+          { onConversationStarted, onConversationComplete },
         )
       })
       act(() => {
-        callbacks.onData('first chunk', true, {
-          messageId: 'm-1',
-          conversationId: 'real-alpha',
-          taskId: 't-1',
+        callbacks.onWorkflowStarted({
+          workflow_run_id: 'wr-workflow',
+          task_id: 'task-workflow',
+          conversation_id: 'real-workflow',
         })
       })
 
-      expect(onConversationStarted).toHaveBeenCalledWith('real-alpha', 'draft:alpha')
+      expect(onConversationStarted).toHaveBeenCalledWith('real-workflow', 'draft:workflow')
+
+      await act(async () => {
+        await callbacks.onCompleted()
+      })
+      expect(onConversationComplete).toHaveBeenCalledWith(
+        'real-workflow',
+        'wr-workflow',
+        'draft:workflow',
+      )
     })
 
     it('should clear only the active session snapshot when handleStop is called', async () => {
-      const { clearInstalledChatRecovery } = await import('../../installed-chat-recovery')
-      const clearSpy = vi.mocked(clearInstalledChatRecovery)
-      clearSpy.mockClear()
+      const { deleteInstalledAppChatDraft } = await import(
+        '@/service/installed-app-chat-drafts'
+      )
+      const deleteSpy = vi.mocked(deleteInstalledAppChatDraft)
+      deleteSpy.mockClear()
 
       const { result, rerender } = renderHook(
         ({ sessionId }: { sessionId: string }) =>
@@ -3477,26 +3490,319 @@ describe('useChat', () => {
             undefined,
             { sessionId },
           ),
-        { initialProps: { sessionId: 'conv-active' } },
+        { initialProps: { sessionId: 'draft:active' } },
       )
 
       // First stop clears the active conversation's snapshot.
       act(() => {
         result.current.handleStop()
       })
-      const firstCallIds = clearSpy.mock.calls.map(([, id]) => id)
-      expect(firstCallIds).toContain('conv-active')
+      const firstCallIds = deleteSpy.mock.calls.map(([, id]) => id)
+      expect(firstCallIds).toContain('draft:active')
 
-      clearSpy.mockClear()
+      deleteSpy.mockClear()
       // Switching to a sibling session and stopping must target the new
       // active session, not the previous one.
-      rerender({ sessionId: 'conv-other' })
+      rerender({ sessionId: 'draft:other' })
       act(() => {
         result.current.handleStop()
       })
-      const clearedIds = clearSpy.mock.calls.map(([, id]) => id)
-      expect(clearedIds).toContain('conv-other')
-      expect(clearedIds).not.toContain('conv-active')
+      const clearedIds = deleteSpy.mock.calls.map(([, id]) => id)
+      expect(clearedIds).toContain('draft:other')
+      expect(clearedIds).not.toContain('draft:active')
+    })
+
+    it('should report the originating session id even after the user switches away', async () => {
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+
+      const onConversationStarted = vi.fn()
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:alpha' } },
+      )
+
+      // Stream starts while user is on draft:alpha.
+      act(() => {
+        result.current.handleSend(
+          'test-url',
+          { query: 'send from alpha' },
+          { onConversationStarted },
+        )
+      })
+      // User switches to a new draft before the server returns the id.
+      rerender({ sessionId: 'draft:beta' })
+
+      // Server emits the real id via workflow_started (no first-message chunk yet).
+      act(() => {
+        callbacks.onWorkflowStarted({
+          workflow_run_id: 'wf-1',
+          task_id: 't-1',
+          conversation_id: 'real-alpha',
+          message_id: 'm-1',
+        })
+      })
+
+      // The originating draft:alpha must be reported, not the new draft:beta.
+      expect(onConversationStarted).toHaveBeenCalledWith('real-alpha', 'draft:alpha')
+    })
+
+    it('should NOT replace the wrong draft if the user sends a second message from a new draft before the first one returns', async () => {
+      let firstCallbacks: HookCallbacks
+      let secondCallbacks: HookCallbacks
+      let callIndex = 0
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        if (callIndex === 0) firstCallbacks = options as HookCallbacks
+        else secondCallbacks = options as HookCallbacks
+        callIndex += 1
+      })
+
+      const onConversationStarted = vi.fn()
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:alpha' } },
+      )
+
+      // First stream starts on draft:alpha.
+      act(() => {
+        result.current.handleSend(
+          'test-url',
+          { query: 'A' },
+          { onConversationStarted },
+        )
+      })
+      // User opens a second draft and sends from it.
+      rerender({ sessionId: 'draft:beta' })
+      act(() => {
+        result.current.handleSend(
+          'test-url',
+          { query: 'B' },
+          { onConversationStarted },
+        )
+      })
+      // The first stream resolves first.
+      act(() => {
+        firstCallbacks.onWorkflowStarted({
+          workflow_run_id: 'wf-A',
+          task_id: 't-A',
+          conversation_id: 'real-alpha',
+          message_id: 'm-A',
+        })
+      })
+      // The second stream resolves next.
+      act(() => {
+        secondCallbacks.onWorkflowStarted({
+          workflow_run_id: 'wf-B',
+          task_id: 't-B',
+          conversation_id: 'real-beta',
+          message_id: 'm-B',
+        })
+      })
+
+      // Each draft must map to its own real conversation id.
+      expect(onConversationStarted).toHaveBeenCalledWith('real-alpha', 'draft:alpha')
+      expect(onConversationStarted).toHaveBeenCalledWith('real-beta', 'draft:beta')
+    })
+
+    it('should follow the draft alias when the user revisits an already-promoted draft', async () => {
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:alpha' } },
+      )
+
+      // Stream starts on draft:alpha and resolves to real-alpha.
+      act(() => {
+        result.current.handleSend('test-url', { query: 'A' }, {})
+      })
+      act(() => {
+        callbacks.onWorkflowStarted({
+          workflow_run_id: 'wf-A',
+          task_id: 't-A',
+          conversation_id: 'real-alpha',
+          message_id: 'm-A',
+        })
+      })
+      act(() => {
+        callbacks.onData('A body', false, { messageId: 'm-A' })
+      })
+
+      // User moves to a different draft and back.
+      rerender({ sessionId: 'draft:beta' })
+      rerender({ sessionId: 'draft:alpha' })
+
+      // The body must be visible because draft:alpha now aliases to real-alpha.
+      expect(result.current.chatList.some((item) => item.content === 'A body')).toBe(true)
+    })
+
+    it('should NOT clear the wrong session snapshot when stopping a background stream', async () => {
+      const { deleteInstalledAppChatDraft } = await import(
+        '@/service/installed-app-chat-drafts'
+      )
+      const deleteSpy = vi.mocked(deleteInstalledAppChatDraft)
+      deleteSpy.mockClear()
+
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:A' } },
+      )
+
+      // Stream A starts on draft:A.
+      act(() => {
+        result.current.handleSend('test-url', { query: 'A' }, {})
+      })
+      act(() => {
+        callbacks.onWorkflowStarted({
+          workflow_run_id: 'wf-A',
+          task_id: 't-A',
+          conversation_id: 'conv-A',
+          message_id: 'm-A',
+        })
+      })
+      act(() => {
+        result.current.handleStop()
+      })
+      const firstIds = deleteSpy.mock.calls.map(([, id]) => id)
+      expect(firstIds).toContain('draft:A')
+
+      deleteSpy.mockClear()
+      // Background stream finishes while user is on a different session.
+      rerender({ sessionId: 'draft:B' })
+      act(() => {
+        callbacks.onCompleted()
+      })
+      expect(deleteSpy).not.toHaveBeenCalled()
+    })
+
+    it('should keep the chat tree visible when the user switches back to a promoted draft after the stream finished', async () => {
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+
+      const onGetConversationMessages = vi.fn().mockResolvedValue({
+        data: [
+          {
+            id: 'm-final',
+            answer: 'final answer from history',
+            agent_thoughts: [],
+            message_files: [],
+            retriever_resources: [],
+            metadata: { reasoning: null },
+            created_at: Date.now(),
+            answer_tokens: 10,
+            message_tokens: 5,
+            provider_response_latency: 1,
+            workflow_run_id: 'wf-final',
+            inputs: {},
+            query: 'A',
+          },
+        ],
+      })
+
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:alpha' } },
+      )
+
+      // Send on draft:alpha.
+      act(() => {
+        result.current.handleSend(
+          'test-url',
+          { query: 'A' },
+          { onGetConversationMessages },
+        )
+      })
+      act(() => {
+        callbacks.onWorkflowStarted({
+          workflow_run_id: 'wf-A',
+          task_id: 't-A',
+          conversation_id: 'real-alpha',
+          message_id: 'm-final',
+        })
+      })
+      act(() => {
+        callbacks.onData('partial body ', true, {
+          messageId: 'm-final',
+          conversationId: 'real-alpha',
+          taskId: 't-A',
+        })
+      })
+      // Move to a different draft before stream completes.
+      rerender({ sessionId: 'draft:beta' })
+      // The original stream resolves.
+      await act(async () => {
+        await callbacks.onCompleted()
+      })
+
+      // User moves back to the original draft. The final answer must be
+      // visible without an empty placeholder.
+      rerender({ sessionId: 'draft:alpha' })
+      const hasFinal = result.current.chatList.some((item) =>
+        ['m-final'].includes(item.id as string),
+      )
+      expect(hasFinal).toBe(true)
     })
   })
 })
