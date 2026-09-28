@@ -1,7 +1,7 @@
 """add installed_app_chat_drafts table for in-flight chat persistence
 
 Revision ID: c1d2e3f4a5b6
-Revises: fecff1c3da27
+Revises: 7a1c2d9e4b60
 Create Date: 2026-09-24 12:00:00.000000
 
 """
@@ -33,7 +33,7 @@ def upgrade():
 
     op.create_table(
         "installed_app_chat_drafts",
-        sa.Column("draft_id", models.types.StringUUID(), primary_key=True),
+        sa.Column("draft_id", sa.String(length=255), primary_key=True),
         sa.Column("tenant_id", models.types.StringUUID(), nullable=False),
         sa.Column("installed_app_id", models.types.StringUUID(), nullable=False),
         sa.Column("user_id", models.types.StringUUID(), nullable=False),
