@@ -3,9 +3,10 @@ services:
     build:
       context: ..
       dockerfile: .docker-build-context/api/Dockerfile
-    image: dify-api-custom:1.16.0-fable2
+    image: dify-api-custom:1.16.0-fable3
     container_name: dify1160-custom-api-1
     environment:
+      MIGRATION_ENABLED: "false"
       DB_HOST: db_postgres
       DB_PORT: 5432
       DB_USERNAME: postgres
@@ -30,9 +31,10 @@ services:
     build:
       context: ..
       dockerfile: .docker-build-context/api/Dockerfile
-    image: dify-api-custom:1.16.0-fable2
+    image: dify-api-custom:1.16.0-fable3
     container_name: dify1160-custom-worker-1
     environment:
+      MIGRATION_ENABLED: "false"
       DB_HOST: db_postgres
       DB_PORT: 5432
       DB_USERNAME: postgres
@@ -57,9 +59,10 @@ services:
     build:
       context: ..
       dockerfile: .docker-build-context/api/Dockerfile
-    image: dify-api-custom:1.16.0-fable2
+    image: dify-api-custom:1.16.0-fable3
     container_name: dify1160-custom-worker_beat-1
     environment:
+      MIGRATION_ENABLED: "false"
       DB_HOST: db_postgres
       DB_PORT: 5432
       DB_USERNAME: postgres
@@ -84,9 +87,10 @@ services:
     build:
       context: ..
       dockerfile: .docker-build-context/api/Dockerfile
-    image: dify-api-custom:1.16.0-fable2
+    image: dify-api-custom:1.16.0-fable3
     container_name: dify1160-custom-api_websocket-1
     environment:
+      MIGRATION_ENABLED: "false"
       DB_HOST: db_postgres
       DB_PORT: 5432
       DB_USERNAME: postgres
@@ -108,7 +112,7 @@ services:
       - dify1160-custom-redis-1:redis
       - dify1160-custom-weaviate-1:weaviate
   web:
-    image: dify-web-custom:1.16.0-fable2
+    image: dify-web-custom:1.16.0-fable10
     container_name: dify1160-custom-web-1
     environment:
       HOSTNAME: 0.0.0.0

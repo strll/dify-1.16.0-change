@@ -1110,6 +1110,7 @@ describe('useChatWithHistory', () => {
       expect(result!.current.appId).toBe('installed-app-id')
       expect(result!.current.appData?.site.title).toBe('Installed App')
     })
+
   })
 
   // Scenario: appPrevChatTree is built from chat list messages.

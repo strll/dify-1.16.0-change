@@ -215,7 +215,8 @@ const ChatWrapper = () => {
         onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
         onConversationStarted: handleConversationStarted,
-        onConversationComplete: currentConversationId ? undefined : handleConversationComplete,
+        onConversationComplete:
+          isInstalledApp || !currentConversationId ? handleConversationComplete : undefined,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
     }
@@ -251,13 +252,15 @@ const ChatWrapper = () => {
       }
 
       handleSend(getUrl('chat-messages', appSourceType, appId || ''), data, {
-        onGetConversationMessages: isNewAgent
-          ? (conversationId) => fetchChatList(conversationId, appSourceType, appId)
-          : undefined,
+        onGetConversationMessages:
+          isNewAgent || isInstalledApp
+            ? (conversationId) => fetchChatList(conversationId, appSourceType, appId)
+            : undefined,
         onGetSuggestedQuestions: (responseItemId) =>
           fetchSuggestedQuestions(responseItemId, appSourceType, appId),
         onConversationStarted: handleConversationStarted,
-        onConversationComplete: isHistoryConversation ? undefined : handleConversationComplete,
+        onConversationComplete:
+          isInstalledApp || !isHistoryConversation ? handleConversationComplete : undefined,
         isPublicAPI: appSourceType === AppSourceType.webApp,
       })
       const appMode = isNewAgent

@@ -23,6 +23,7 @@ const ChatWithHistory: FC<ChatWithHistoryProps> = ({ className }) => {
     appData,
     appChatListDataLoading,
     chatShouldReloadKey,
+    isInstalledApp,
     isMobile,
     themeBuilder,
     sidebarCollapseState,
@@ -78,8 +79,10 @@ const ChatWithHistory: FC<ChatWithHistoryProps> = ({ className }) => {
           )}
         >
           {!isMobile && <Header />}
-          {appChatListDataLoading && <Loading type="app" />}
-          {!appChatListDataLoading && <ChatWrapper key={chatShouldReloadKey} />}
+          {!isInstalledApp && appChatListDataLoading && <Loading type="app" />}
+          {(isInstalledApp || !appChatListDataLoading) && (
+            <ChatWrapper key={isInstalledApp ? 'installed' : chatShouldReloadKey} />
+          )}
         </div>
       </div>
     </div>
@@ -125,6 +128,7 @@ const ChatWithHistoryWrap: FC<ChatWithHistoryWrapProps> = ({
     conversationRenaming,
     handleRenameConversation,
     handleNewConversationCompleted,
+    handleConversationStarted,
     chatShouldReloadKey,
     isInstalledApp,
     appId,
@@ -167,6 +171,7 @@ const ChatWithHistoryWrap: FC<ChatWithHistoryWrapProps> = ({
         conversationRenaming,
         handleRenameConversation,
         handleNewConversationCompleted,
+        handleConversationStarted,
         chatShouldReloadKey,
         isMobile,
         isInstalledApp,

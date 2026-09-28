@@ -120,6 +120,7 @@ const createMockContext = (
     conversationRenaming: false,
     handleRenameConversation: vi.fn(),
     handleNewConversationCompleted: vi.fn(),
+    handleConversationStarted: vi.fn(),
     chatShouldReloadKey: '',
     isMobile: false,
     isInstalledApp: false,

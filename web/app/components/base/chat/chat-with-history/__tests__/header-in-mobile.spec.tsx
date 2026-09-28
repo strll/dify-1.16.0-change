@@ -84,6 +84,7 @@ const defaultContextValue: ChatWithHistoryContextValue = {
   handleStartChat: vi.fn(),
   handleChangeConversation: vi.fn(),
   handleNewConversationCompleted: vi.fn(),
+  handleConversationStarted: vi.fn(),
   handleFeedback: vi.fn(),
   sidebarCollapseState: false,
   handleSidebarCollapse: vi.fn(),

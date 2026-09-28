@@ -1,9 +1,11 @@
 import type { ExtraContent } from '../chat/type'
-import type { Callback, ChatConfig, ChatItem, Feedback } from '../types'
+import type { Callback, ChatConfig, ChatItem, ChatItemInTree, Feedback } from '../types'
 import type { InstalledApp } from '@/models/explore'
 import type { AppData, ConversationItem } from '@/models/share'
+import type { ChatDraftItem } from '@/service/installed-app-chat-drafts'
 import type { HumanInputFilledFormData, HumanInputFormData } from '@/types/workflow'
 import { toast } from '@langgenius/dify-ui/toast'
+import { useQueryClient } from '@tanstack/react-query'
 import { noop } from 'es-toolkit/function'
 import { produce } from 'immer'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -18,6 +20,10 @@ import { useWebAppStore } from '@/context/web-app-context'
 import { useAppFavicon } from '@/hooks/use-app-favicon'
 import { changeLanguage } from '@/i18n-config/client'
 import {
+  deleteInstalledAppChatDraft,
+  listInstalledAppChatDrafts,
+} from '@/service/installed-app-chat-drafts'
+import {
   AppSourceType,
   delConversation,
   pinConversation,
@@ -26,6 +32,7 @@ import {
   updateFeedback,
 } from '@/service/share'
 import {
+  shareQueryKeys,
   useInvalidateShareConversations,
   useShareChatList,
   useShareConversationName,
@@ -41,10 +48,6 @@ import {
   getRawUserVariablesFromUrlParams,
 } from '../utils'
 import { publishConversationSyncEvent, subscribeConversationSyncEvents } from './conversation-sync'
-import {
-  deleteInstalledAppChatDraft,
-  listInstalledAppChatDrafts,
-} from '@/service/installed-app-chat-drafts'
 
 export const isDraftConversationId = (conversationId: string) => conversationId.startsWith('draft:')
 
@@ -225,8 +228,8 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   // a real conversation that still exists server-side.
   const draftsHydratedRef = useRef(false)
   useEffect(() => {
-    if (!appId || !conversationIdInfo || draftsHydratedRef.current) return
-    const perApp = conversationIdInfo[appId]
+    if (!appId || draftsHydratedRef.current) return
+    const perApp = conversationIdInfo?.[appId]
     if (!perApp) {
       draftsHydratedRef.current = true
       return
@@ -246,20 +249,28 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     }
     draftsHydratedRef.current = true
   }, [appId, conversationIdInfo, setConversationIdInfo])
+  const [restoredChatDrafts, setRestoredChatDrafts] = useState<ChatDraftItem[]>([])
+  const queryClient = useQueryClient()
   useEffect(() => {
     if (!isInstalledApp || !appId || !draftsHydratedRef.current) return
     let cancelled = false
     void listInstalledAppChatDrafts(appId)
       .then((response) => {
         if (cancelled || !response?.data) return
+        const activeDrafts = response.data.filter(
+          (draft) => !draft.is_terminal && (draft.conversation_id || draft.workflow_run_id),
+        )
+        setRestoredChatDrafts(activeDrafts)
         setOriginConversationList((current) => {
-          const existingIds = new Set(current.map(item => item.id))
+          const existingIds = new Set(current.map((item) => item.id))
           const merged = [...current]
-          for (const draft of response.data) {
-            if (existingIds.has(draft.draft_id)) continue
+          for (const draft of activeDrafts) {
+            if (draft.conversation_id || existingIds.has(draft.draft_id)) continue
             merged.unshift({
               id: draft.draft_id,
-              name: draft.title || '',
+              name:
+                draft.title ||
+                String(draft.chat_tree.find((item) => !item.isAnswer)?.content || ''),
               inputs: {},
               introduction: '',
             })
@@ -323,13 +334,27 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   const invalidateShareConversations = useInvalidateShareConversations()
   const [clearChatList, setClearChatList] = useState(false)
   const [isResponding, setIsResponding] = useState(false)
-  const appPrevChatTree = useMemo(
+  const restoredChatDraft = useMemo(
     () =>
-      currentServerConversationId && appChatListData?.data.length
-        ? buildChatItemTree(getFormattedChatList(appChatListData.data))
-        : [],
-    [appChatListData, currentServerConversationId],
+      restoredChatDrafts.find(
+        (draft) =>
+          draft.draft_id === currentConversationId ||
+          draft.conversation_id === currentServerConversationId,
+      ),
+    [currentConversationId, currentServerConversationId, restoredChatDrafts],
   )
+  const appPrevChatTree = useMemo(() => {
+    const messages = currentServerConversationId ? appChatListData?.data : undefined
+    const draftTree = restoredChatDraft?.chat_tree as ChatItemInTree[] | undefined
+    if (messages?.length) {
+      const lastMessageId = messages[messages.length - 1].id
+      const containsLastMessage = (nodes: ChatItemInTree[]): boolean =>
+        nodes.some((node) => node.id === lastMessageId || containsLastMessage(node.children || []))
+      if (!draftTree?.length || !containsLastMessage(draftTree))
+        return buildChatItemTree(getFormattedChatList(messages))
+    }
+    return draftTree?.length ? draftTree : []
+  }, [appChatListData, currentServerConversationId, restoredChatDraft])
   const [showNewConversationItemInList, setShowNewConversationItemInList] = useState(false)
   const [draftConversationIds, setDraftConversationIds] = useState<string[]>([])
   const pinnedConversationList = useMemo(() => {
@@ -584,8 +609,19 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       setNewConversationId('')
       handleConversationIdInfoChange(conversationId)
       setClearChatList(!conversationId || isDraftConversationId(conversationId))
+      if (isInstalledApp && conversationId && !isDraftConversationId(conversationId))
+        void queryClient.invalidateQueries({
+          queryKey: shareQueryKeys.chatList({ conversationId, appSourceType, appId }),
+        })
     },
-    [handleConversationIdInfoChange, isInstalledApp, setClearChatList],
+    [
+      appId,
+      appSourceType,
+      handleConversationIdInfoChange,
+      isInstalledApp,
+      queryClient,
+      setClearChatList,
+    ],
   )
   const handleNewConversation = useCallback(async () => {
     if (!isInstalledApp) currentChatInstanceRef.current.handleStop()
@@ -680,6 +716,9 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
         }
         setOriginConversationList((current) => current.filter((item) => item.id !== conversationId))
         setDraftConversationIds((current) => current.filter((id) => id !== conversationId))
+        setRestoredChatDrafts((current) =>
+          current.filter((draft) => draft.draft_id !== conversationId),
+        )
         toast.success(t(($) => $['api.success'], { ns: 'common' }))
         onSuccess()
       } finally {
@@ -739,12 +778,12 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       // draft itself OR an already-resolved alias to a real conversation id.
       // We trust the caller (useChat) to forward the right key.
       const draftSessionId = sessionId
-        ? (isDraftConversationId(sessionId)
-            ? sessionId
-            : // If the caller passed an aliased real id, leave the cleanup to
-              // the reverse-lookup path inside useChat which removes the
-              // draft via the sessionAliasesRef.
-              '')
+        ? isDraftConversationId(sessionId)
+          ? sessionId
+          : // If the caller passed an aliased real id, leave the cleanup to
+            // the reverse-lookup path inside useChat which removes the
+            // draft via the sessionAliasesRef.
+            ''
         : isDraftConversationId(currentConversationId)
           ? currentConversationId
           : ''
@@ -752,15 +791,15 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       if (isActiveSession) setNewConversationId(conversationId)
       if (draftSessionId)
         setDraftConversationIds((current) => current.filter((id) => id !== draftSessionId))
-      // The draft row on the backend is now superseded by the real
-      // conversation. chat/hooks.ts will fire the actual DELETE, but we also
-      // issue one from here as a safety net for streams that never call
-      // back into this hook (e.g. fast-reload cases).
-      if (isInstalledApp && appId && draftSessionId)
-        void deleteInstalledAppChatDraft(appId, draftSessionId).catch(() => undefined)
+      // Keep the server-side draft until the stream completes. The regular
+      // conversation exists at this point, but its persisted message history
+      // does not contain the in-flight workflow tree needed after a reload.
       if (isActiveSession) handleConversationIdInfoChange(conversationId)
       setOriginConversationList((current) => {
-        if (current.some((item) => item.id === conversationId)) return current
+        const withoutDraft = draftSessionId
+          ? current.filter((item) => item.id !== draftSessionId)
+          : current
+        if (withoutDraft.some((item) => item.id === conversationId)) return withoutDraft
         return [
           {
             id: conversationId,
@@ -768,35 +807,61 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
             inputs: {},
             introduction: '',
           },
-          ...current,
+          ...withoutDraft,
         ]
       })
       if (appId) publishConversationSyncEvent({ type: 'created', appId, conversationId })
     },
-    [
-      appId,
-      currentConversationId,
-      handleConversationIdInfoChange,
-      isInstalledApp,
-      t,
-    ],
+    [appId, currentConversationId, handleConversationIdInfoChange, isInstalledApp, t],
   )
   const handleNewConversationCompleted = useCallback(
     (newConversationId: string, sessionId?: string) => {
       const isActiveSession = !sessionId || sessionId === currentConversationId
       handleConversationStarted(newConversationId, sessionId)
+      const completedDraftIds = restoredChatDrafts
+        .filter(
+          (draft) => draft.draft_id === sessionId || draft.conversation_id === newConversationId,
+        )
+        .map((draft) => draft.draft_id)
+      if (sessionId && isDraftConversationId(sessionId) && !completedDraftIds.includes(sessionId))
+        completedDraftIds.push(sessionId)
+      if (completedDraftIds.length) {
+        const completedDraftIdSet = new Set(completedDraftIds)
+        setRestoredChatDrafts((current) =>
+          current.filter((draft) => !completedDraftIdSet.has(draft.draft_id)),
+        )
+        if (isInstalledApp && appId) {
+          for (const draftId of completedDraftIds)
+            void deleteInstalledAppChatDraft(appId, draftId).catch(() => undefined)
+        }
+      }
       if (isActiveSession) {
-        setNewConversationId(newConversationId)
+        // The stream is complete; allow the saved server messages to hydrate
+        // the chat even if the transient in-memory tree was lost.
+        setNewConversationId('')
         handleConversationIdInfoChange(newConversationId)
         setShowNewConversationItemInList(false)
       }
       invalidateShareConversations()
+      if (isInstalledApp && newConversationId)
+        void queryClient.invalidateQueries({
+          queryKey: shareQueryKeys.chatList({
+            conversationId: newConversationId,
+            appSourceType,
+            appId,
+          }),
+        })
     },
     [
+      appSourceType,
       currentConversationId,
       handleConversationIdInfoChange,
       handleConversationStarted,
       invalidateShareConversations,
+      isInstalledApp,
+      appId,
+      restoredChatDrafts,
+      queryClient,
     ],
   )
   const handleFeedback = useCallback(

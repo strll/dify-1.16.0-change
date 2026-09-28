@@ -88,6 +88,7 @@ const defaultHookReturn: HookReturn = {
   conversationRenaming: false,
   handleRenameConversation: vi.fn(),
   handleNewConversationCompleted: vi.fn(),
+  handleConversationStarted: vi.fn(),
   newConversationId: '',
   chatShouldReloadKey: 'test-reload-key',
   handleFeedback: vi.fn(),
