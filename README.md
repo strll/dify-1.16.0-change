@@ -103,6 +103,48 @@ Web App 的多会话和工作流恢复功能。修改保持 1.16.0 的接口兼�
 - 移除成员时只保护目标成员角色为 `owner` 的情况。目标成员不是 `owner` 时可以移除，包括移除当前登录账号的非 owner 关系。没有 owner 的历史工作空间也可以正常处理非 owner 成员移除。
 - 统一前端 HTTP 错误解析，显示后端实际错误信息，避免出现 `[object Response]`，并保留各模块原有的错误处理行为。
 
+#### 用户管理超级管理员授权
+
+这里的“超级管理员”指可以看到并操作自定义“用户管理”页面的账号。权限由自定义表 `user_management_permissions` 控制，与工作空间的 `owner`、`admin` 角色无关。只通过 SQL 直接修改 Dify 数据库授予或撤销该权限；API 启动时会自动创建该表（如不存在）。
+
+进入 Dify 使用的 PostgreSQL 容器及数据库（容器名、数据库用户和库名按实际部署调整）：
+
+```bash
+docker exec -it docker-db_postgres-1 psql -U postgres -d dify
+```
+
+将下方邮箱替换为需要授权的 Dify 登录邮箱。授权 SQL 可重复执行：
+
+```sql
+INSERT INTO user_management_permissions
+    (id, email, enabled, granted_by_email)
+VALUES
+    (gen_random_uuid()::text, lower(trim('admin@example.com')), true, 'manual-sql')
+ON CONFLICT (email) DO UPDATE
+SET enabled = true,
+    granted_by_email = 'manual-sql',
+    updated_at = CURRENT_TIMESTAMP;
+```
+
+查询权限：
+
+```sql
+SELECT email, enabled
+FROM user_management_permissions
+WHERE email = lower(trim('admin@example.com'));
+```
+
+撤销权限：
+
+```sql
+UPDATE user_management_permissions
+SET enabled = false,
+    updated_at = CURRENT_TIMESTAMP
+WHERE email = lower(trim('admin@example.com'));
+```
+
+授权后刷新页面；若导航栏仍未显示“用户管理”，退出并重新登录。该授权不会改变账号在任何工作空间中的角色。
+
 ### `/installed` Web App 多会话
 
 `/installed` 页面支持工作流执行期间创建和切换多个独立会话：
