@@ -7,8 +7,8 @@ description: Maintain or extend this repository's Dify 1.16.0 custom user-manage
 
 Use this skill when working on the local customization layer for Dify 1.16.0.
 The customization must remain a narrow extension of upstream behavior: preserve
-unrelated Dify modules, do not add a database schema migration for these
-features, and do not copy implementation files from a different Dify release.
+unrelated Dify modules, do not introduce further database schema changes without
+explicit approval, and do not copy implementation files from a different release.
 
 Read [current-customization.md](references/current-customization.md) before
 changing a covered area. It records product requirements, ownership boundaries,
@@ -16,6 +16,8 @@ the current image contract, and verification history.
 
 ## First Checks
 
+1. Confirm the checkout's branch, upstream baseline, and remote. A nearby Dify
+   checkout may target a different release; do not substitute it for this project.
 1. Read the root `AGENTS.md` and the nearest scoped `AGENTS.md` before editing.
 1. Inspect `git status` before making changes. Build contexts and generated
    files may be untracked; do not delete, package, or commit them blindly.
@@ -29,9 +31,10 @@ the current image contract, and verification history.
 - Keep installed-chat behavior scoped to `/installed`. Do not change standard
   Web App, embedded chat, or other Dify chat surfaces without separate intent
   and regression coverage.
-- The installed-chat recovery mechanism is browser-local IndexedDB plus
-  existing Dify server recovery behavior. Do not add database tables or make
-  a client-generated UUID masquerade as a server `conversation_id`.
+- Inspect the current recovery implementation: it includes server-side
+  installed chat drafts and migrations as well as client session state. Do not
+  assume it is IndexedDB-only or claim the schema is unchanged. Do not make a
+  client-generated UUID masquerade as a server `conversation_id`.
 - Keep user-visible frontend strings in the existing Chinese and English i18n
   catalogs. Roles deliberately retain their current role labels.
 - Workspace assignment can use a workspace name or optional workspace ID.
@@ -53,7 +56,8 @@ not replace unrelated infrastructure services.
 
 ## Delivery
 
-When producing a deployable delivery, export frontend and backend images as
-separate tar archives. Include an image-only Compose override, checksum file,
-deployment README, and an updated agent handoff. Verify image tags and archive
-contents before delivery.
+Match delivery to the requested scope. For frontend-only deployment, export only
+the verified web image and replace only `web`; do not rebuild or redeploy the API.
+An image in Docker Desktop is not a tar file until `docker save` succeeds.
+Read the Docker Contract and Packaging sections of the reference for deployment
+or security-review file handoff. Do not claim a proposed tag was already built.

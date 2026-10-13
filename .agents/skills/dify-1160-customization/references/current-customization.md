@@ -9,8 +9,12 @@ customization layer. The intended changes are limited to:
 2. `/installed` Web App multi-conversation and workflow recovery behavior.
 3. Deployment packaging for the customized web and API images.
 
-No historical Dify database data should be deleted. The customization does not
-introduce a database schema change. Do not backport a full module from Dify
+No historical Dify database data should be deleted. The current customization
+includes `InstalledAppChatDraft` and two migrations under `api/migrations/versions/`
+(`c1d2e3f4a5b6` and `d8e6f4a2b1c9`); disclose these in handoffs. The earlier
+no-schema-change requirement does not describe the current implementation.
+Do not introduce additional schema changes without explicit approval.
+Do not backport a full module from Dify
 1.16.1 or 1.17.x: compare the 1.16.0 implementation and make a minimal,
 signature-compatible change instead.
 
@@ -103,7 +107,8 @@ Inspect these before modifying installed-chat behavior:
   is the cross-tab synchronization helper. Treat it as feature-local state
   coordination, not a replacement for server history.
 
-The implementation uses the existing backend response and recovery interfaces;
+The implementation includes custom `chat-drafts` controllers, a service, and
+`web/service/installed-app-chat-drafts.ts` in addition to response/recovery interfaces;
 it must not invent a server conversation ID before the backend returns one.
 Snapshots need a stable active session key until that handoff occurs, then must
 move to the real conversation identity. When merging recovered UI state with a
@@ -121,7 +126,9 @@ For the latest installed-chat deletion/recovery work, run from `web/`:
   --reporter=dot
 ```
 
-The latest focused run passed **229 tests**. Previous tests cover the real
+An earlier focused run passed **229 tests**; this is historical evidence, not
+verification of the current checkout. Re-run relevant tests before reporting
+current results. Previous tests cover the real
 conversation ID handoff, precise draft removal, active-session persistence,
 server-terminal recovery merging, and deletion without replacement draft.
 
@@ -133,16 +140,22 @@ format/type checks when the affected module requires them.
 
 ## Docker Contract
 
-The verified local images are:
+The last observed local deployment on 2026-10-13 used:
 
 | Service group | Image tag | Image ID |
 | --- | --- | --- |
-| `web` | `dify-web-custom:1.16.0-sessionfix4` | `sha256:525daa959dfba1825199eb1740e356bc72d3539ea9439c62de65509495be2098` |
-| `api`, `worker`, `worker_beat`, `api_websocket` | `dify-api-custom:1.16.0-sessionfix3` | `sha256:b6eb6f9b11b8edd1734eed96aaf7f22dc987cacce9cd49adf3e83c1ab9f98ca2` |
+| `web` | `dify-web-custom:1.16.0-filefix32` | `sha256:a9692c5483e70afe5ed31eec5cb28c134c093f1a72ede6aae0f807e9875aaf4b` |
+| `api`, `worker`, `worker_beat`, `api_websocket` | `dify-api-custom:1.16.0-fable3` | Re-inspect before delivery |
 
-The image-only override is:
+The local custom Compose file is:
 
 `docker/docker-compose.custom-1.16.0.yaml`
+
+It contains local credentials, backend configuration, and an external local
+network. It is not an image-only production override and has no `nginx` service.
+Do not copy it wholesale onto a server or run `up web nginx` against it alone.
+Use the server's existing Compose file combination and project identity, with
+a narrow override changing only `services.web.image` for frontend-only delivery.
 
 The browser-facing Nginx topology is unchanged:
 
@@ -154,9 +167,21 @@ Keep `CONSOLE_API_URL` and `APP_API_URL` empty when using the relative Nginx
 model. An empty value means use the current browser origin and proxy path; it
 does not disable API access.
 
+Keep `SERVER_CONSOLE_API_URL=http://api:5001` for internal server-side API access.
+The frontend listens on port 3000; its image does not contain Nginx.
+
 For a backend rebuild, redeploy all four backend services with the same tag.
-For a frontend rebuild, redeploy `web` and restart Nginx if its current
-configuration needs to reload. Do not replace `db`, `redis`, `weaviate`,
+For a frontend-only replacement, use the existing Compose configuration with
+`up -d --no-deps --force-recreate web`. Do not restart Nginx by default when the
+user requests only a web replacement. Verify HTTP access: if recreation changes
+web's IP, a static Nginx upstream may retain the old address. Diagnose a 502 and
+request any additional reload/restart authority needed; a graceful reload can
+refresh the upstream without restarting the container.
+For `host not found in upstream "web"`, first check whether web is running and
+shares the Nginx network with alias `web`. On 2026-10-13, starting the stopped web
+container restored resolution; its earlier exit code 255 was not explained by
+application logs and must not be attributed to a proven code bug.
+Do not replace `db`, `redis`, `weaviate`,
 `plugin_daemon`, sandbox services, or SSO merely to test these changes.
 
 ## Packaging
@@ -178,3 +203,30 @@ Export frontend and backend images separately with `docker save`. Check each
 archive's `manifest.json` and SHA-256 before handing it off. The deployment
 README must state image tags, `docker load` commands, combined Compose usage,
 and the prohibition on `down -v`.
+
+Only deliver both images when requested. Check that the selected build context
+contains current code; existing `.docker-build-context*` directories may be stale.
+Prefer reusing an already verified image when no rebuild is requested. Report
+the actual exported file path and size after checking it exists.
+
+## Security Review File Handoff
+
+When the user asks only for changed files, copy the current contents of added
+and modified paths, preserving repository-relative structure in a separate
+folder. Determine the list against this project's original `1.16.0` tag and
+include any relevant tracked working-tree changes. Report deleted paths
+separately, since they have no current file to copy. Do not generate extra
+reports, archives, or patches unless requested.
+
+Exclude node_modules, virtual environments, Docker image archives, build
+contexts, runtime volumes, logs, and unrelated untracked delivery files.
+Copy source unchanged: this is packaging, not authorization for hardening or
+redaction. Flag credentials in included configuration; copying files is not a
+security-scan pass. Verify counts and do not overwrite an existing output folder.
+
+At commit `f2b24858cf`, the tag comparison had 73 changed paths: 72 current files
+and deleted `web/public/in-site-message/header-bg.svg`. These counts are a dated
+reference, not a fixed requirement for later exports. Use a writable approved
+destination; do not silently use a different release's source after a permission
+failure. Keep local absolute paths and account information out of reusable skill
+instructions intended for GitHub.
