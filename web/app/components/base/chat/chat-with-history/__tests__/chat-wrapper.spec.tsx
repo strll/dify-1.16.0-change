@@ -522,6 +522,33 @@ describe('ChatWrapper', () => {
     expect(container).not.toBeInTheDocument()
   })
 
+  it('does not reconnect or select a running workflow from the live message list', () => {
+    const handleSwitchSibling = vi.fn()
+    vi.mocked(useChatWithHistoryContext).mockReturnValue({
+      ...defaultContextValue,
+      isInstalledApp: true,
+      appPrevChatTree: [],
+    })
+    vi.mocked(useChat).mockReturnValue({
+      ...defaultChatHookReturn,
+      isResponding: true,
+      chatList: [
+        {
+          id: 'live-answer',
+          content: '',
+          isAnswer: true,
+          workflow_run_id: 'live-run',
+          workflowProcess: { status: 'running', tracing: [] },
+          children: [],
+        },
+      ],
+      handleSwitchSibling,
+    } as unknown as ChatHookReturn)
+
+    render(<ChatWrapper />)
+    expect(handleSwitchSibling).not.toHaveBeenCalled()
+  })
+
   it('should handle workflow resumption with simple structure', () => {
     const handleSwitchSibling = vi.fn()
     vi.mocked(useChat).mockReturnValue({

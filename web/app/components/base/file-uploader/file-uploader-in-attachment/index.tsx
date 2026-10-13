@@ -120,15 +120,17 @@ export type FileUploaderInAttachmentWrapperProps = {
   onChange: (files: FileEntity[]) => void
   fileConfig: FileUpload
   isDisabled?: boolean
+  syncValue?: boolean
 }
 const FileUploaderInAttachmentWrapper = ({
   value,
   onChange,
   fileConfig,
   isDisabled,
+  syncValue,
 }: FileUploaderInAttachmentWrapperProps) => {
   return (
-    <FileContextProvider value={value} onChange={onChange}>
+    <FileContextProvider value={value} onChange={onChange} syncValue={syncValue}>
       <FileUploaderInAttachment isDisabled={isDisabled} fileConfig={fileConfig} />
     </FileContextProvider>
   )

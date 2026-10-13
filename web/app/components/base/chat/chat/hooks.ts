@@ -242,15 +242,27 @@ export const useChat = (
   const sessionAliasesRef = useRef(new Map<string, string>())
   const draftIdsBySessionRef = useRef(new Map<string, string>())
   const conversationIdsBySessionRef = useRef(new Map<string, string>())
+  const isInstalledApp = isInstalledAppPath(pathname) && Boolean(config?.appId)
   const resolveSessionKey = useCallback(
     (key: string) => sessionAliasesRef.current.get(key) || key,
     [],
+  )
+  const getConversationIdForSession = useCallback(
+    (sessionKey: string) => {
+      if (!isInstalledApp) return conversationIdRef.current
+      const resolvedKey = resolveSessionKey(sessionKey)
+      return (
+        conversationIdsBySessionRef.current.get(resolvedKey) ||
+        conversationIdsBySessionRef.current.get(sessionKey) ||
+        ''
+      )
+    },
+    [isInstalledApp, resolveSessionKey],
   )
   // When the user is inside an installed app, the chatTree is persisted to the
   // backend via /installed-apps/{id}/chat-drafts every 200ms so an in-flight
   // workflow survives a page reload. A null value means "do not persist"
   // (webApp path or no draft in flight).
-  const isInstalledApp = isInstalledAppPath(pathname) && Boolean(config?.appId)
   const draftPersistTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const deletedDraftIdsRef = useRef<Set<string>>(new Set())
 
@@ -264,23 +276,33 @@ export const useChat = (
       const conversationId = conversationIdsBySessionRef.current.get(resolvedKey) || ''
       const nodes = [...chatTree]
       let workflowRunId = ''
-      let isTerminal = false
       while (nodes.length) {
         const node = nodes.shift()!
         workflowRunId = node.workflow_run_id || workflowRunId
-        isTerminal ||= isTerminalStatus(node.workflowProcess?.status)
         if (node.children) nodes.push(...node.children)
       }
+      // Earlier completed turns do not make the current turn terminal.
+      const isTerminal = isTerminalStatus(
+        getThreadMessages(chatTree).at(-1)?.workflowProcess?.status,
+      )
       const existingTimer = draftPersistTimersRef.current.get(draftId)
       if (existingTimer) clearTimeout(existingTimer)
       const timer = setTimeout(() => {
         draftPersistTimersRef.current.delete(draftId)
+        // A terminal tree no longer needs recovery persistence. Sending a
+        // final is_terminal=true upsert races with completion cleanup and can
+        // leave a failing draft request after the real conversation exists.
+        if (isTerminal) {
+          deletedDraftIdsRef.current.add(draftId)
+          void deleteInstalledAppChatDraft(installedAppId, draftId).catch(() => undefined)
+          return
+        }
         void upsertInstalledAppChatDraft(installedAppId, {
           draft_id: draftId,
           conversation_id: conversationId || null,
           workflow_run_id: workflowRunId || null,
           chat_tree: chatTree,
-          is_terminal: isTerminal,
+          is_terminal: false,
         }).catch(() => undefined)
       }, 200)
       draftPersistTimersRef.current.set(draftId, timer)
@@ -292,12 +314,13 @@ export const useChat = (
     (draftId: string) => {
       if (!isInstalledApp || !config?.appId) return
       deletedDraftIdsRef.current.add(draftId)
+      // The next turn needs a fresh recovery record, not the deleted prior turn.
+      for (const [sessionKey, existingDraftId] of draftIdsBySessionRef.current) {
+        if (existingDraftId === draftId) draftIdsBySessionRef.current.delete(sessionKey)
+      }
       const timer = draftPersistTimersRef.current.get(draftId)
       if (timer) clearTimeout(timer)
       draftPersistTimersRef.current.delete(draftId)
-      for (const [key, value] of draftIdsBySessionRef.current) {
-        if (value === draftId) draftIdsBySessionRef.current.delete(key)
-      }
       void deleteInstalledAppChatDraft(config.appId, draftId).catch(() => undefined)
     },
     [config?.appId, isInstalledApp],
@@ -320,22 +343,10 @@ export const useChat = (
   useLayoutEffect(() => {
     const previousSessionKey = activeSessionKeyRef.current
     if (previousSessionKey === sessionKey) {
-      const hasLatestHistoryMessage = (nodes: ChatItemInTree[], targetId: string): boolean =>
-        nodes.some(
-          (node) => node.id === targetId || hasLatestHistoryMessage(node.children || [], targetId),
-        )
-      const latestHistoryMessageId = prevChatTree?.length
-        ? getThreadMessages(prevChatTree).at(-1)?.id
-        : undefined
-      if (
-        prevChatTree?.length &&
-        (!chatTreeRef.current.length ||
-          (!respondingSessionsRef.current.get(resolveSessionKey(sessionKey)) &&
-            latestHistoryMessageId &&
-            !hasLatestHistoryMessage(chatTreeRef.current, latestHistoryMessageId)))
-      ) {
-        // Chain conversations have one root even after new messages arrive.
-        // Compare the latest message ID instead of the number of roots.
+      // A history query can return an older snapshot while the current stream
+      // is updating. The native Dify tree is authoritative once it is non-empty;
+      // only hydrate a selected session when its local tree is still empty.
+      if (prevChatTree?.length && !chatTreeRef.current.length) {
         chatTreesBySessionRef.current.set(sessionKey, prevChatTree)
         chatTreeRef.current = prevChatTree
         setChatTree(prevChatTree)
@@ -350,9 +361,25 @@ export const useChat = (
     // was populated earlier with an empty snapshot.
     const isSameSession =
       previousSessionKey && resolveSessionKey(previousSessionKey) === resolvedKey
+    const cachedTree = chatTreesBySessionRef.current.get(resolvedKey)
     const nextTree = isSameSession
       ? chatTreeRef.current
-      : chatTreesBySessionRef.current.get(resolvedKey) || prevChatTree || []
+      : cachedTree?.length
+        ? cachedTree
+        : prevChatTree || []
+    if (isInstalledApp) {
+      console.warn('[installed-chat] session-sync', {
+        previousSessionKey,
+        sessionKey,
+        resolvedKey,
+        isSameSession,
+        currentTreeSize: chatTreeRef.current.length,
+        cachedTreeSize: chatTreesBySessionRef.current.get(resolvedKey)?.length || 0,
+        prevChatTreeSize: prevChatTree?.length || 0,
+        nextTreeSize: nextTree.length,
+        responding: Boolean(respondingSessionsRef.current.get(resolvedKey)),
+      })
+    }
     activeSessionKeyRef.current = sessionKey
     chatTreesBySessionRef.current.set(resolvedKey, nextTree)
     chatTreeRef.current = nextTree
@@ -366,11 +393,39 @@ export const useChat = (
     taskIdRef.current = taskIdsBySessionRef.current.get(resolvedKey) || ''
     setIsResponding(Boolean(respondingSessionsRef.current.get(resolvedKey)))
     isRespondingRef.current = Boolean(respondingSessionsRef.current.get(resolvedKey))
-  }, [initialConversationId, prevChatTree, resolveSessionKey, sessionKey])
-  const threadMessages = useMemo(
-    () => getThreadMessages(chatTree, targetMessageId),
-    [chatTree, targetMessageId],
-  )
+  }, [initialConversationId, isInstalledApp, prevChatTree, resolveSessionKey, sessionKey])
+  const threadMessages = useMemo(() => {
+    const messages = getThreadMessages(chatTree, targetMessageId)
+    if (isInstalledApp && chatTree.length > 0 && messages.length === 0) {
+      console.error('[installed-chat] render-empty', {
+        targetMessageId: targetMessageId || null,
+        treeSize: chatTree.length,
+        treeNodeIds: chatTree.map((node) => node.id),
+        renderedMessageIds: [],
+      })
+    }
+    if (isInstalledApp && targetMessageId && chatTree.length) {
+      const containsTarget = (nodes: ChatItemInTree[]): boolean =>
+        nodes.some((node) => node.id === targetMessageId || containsTarget(node.children || []))
+      if (!containsTarget(chatTree)) {
+        const treeNodeIds: string[] = []
+        const collectNodeIds = (nodes: ChatItemInTree[]) => {
+          nodes.forEach((node) => {
+            treeNodeIds.push(node.id)
+            if (node.children?.length) collectNodeIds(node.children)
+          })
+        }
+        collectNodeIds(chatTree)
+        console.warn('[installed-chat] selected target missing during history refresh', {
+          targetMessageId,
+          treeNodeIds,
+          renderedMessageIds: messages.map((item) => item.id),
+          treeSize: chatTree.length,
+        })
+      }
+    }
+    return messages
+  }, [chatTree, isInstalledApp, targetMessageId])
 
   const getIntroduction = useCallback(
     (str: string) => {
@@ -439,7 +494,9 @@ export const useChat = (
     const nextConversationId = initialConversationId ?? ''
     initialConversationIdRef.current = nextConversationId
     conversationIdRef.current = nextConversationId
-  }, [initialConversationId])
+    if (isInstalledApp && sessionKey && nextConversationId)
+      conversationIdsBySessionRef.current.set(resolveSessionKey(sessionKey), nextConversationId)
+  }, [initialConversationId, isInstalledApp, resolveSessionKey, sessionKey])
 
   /** Find the target node by bfs and then operate on it */
   const produceChatTreeNode = useCallback(
@@ -496,6 +553,17 @@ export const useChat = (
       const currentTree = isInstalledApp
         ? chatTreesBySessionRef.current.get(sessionKey) || []
         : chatTreeRef.current
+      if (isInstalledApp) {
+        console.warn('[installed-chat] tree-update-before', {
+          id,
+          targetSessionKey,
+          activeSessionKey: activeSessionKeyRef.current,
+          resolvedSessionKey: sessionKey,
+          currentTreeSize: currentTree.length,
+          visibleTreeSize: chatTreeRef.current.length,
+          mapHasSession: chatTreesBySessionRef.current.has(sessionKey),
+        })
+      }
       const nextState = produceChatTreeNode(
         id,
         (node) => {
@@ -509,9 +577,21 @@ export const useChat = (
         },
         currentTree,
       )
+      // A lifecycle event can arrive with an ID that is not in the current
+      // session tree yet. Never turn a non-empty installed-app tree into an
+      // empty one in that race; the next event will retry against the same
+      // preserved tree.
+      if (isInstalledApp && currentTree.length && !nextState.length) return
       if (isInstalledApp) chatTreesBySessionRef.current.set(sessionKey, nextState)
       if (isInstalledApp) persistChatDraft(nextState, sessionKey)
       if (!isInstalledApp || sessionKey === resolveSessionKey(activeSessionKeyRef.current)) {
+        if (isInstalledApp)
+          console.warn('[installed-chat] tree-update-after', {
+            id,
+            resolvedSessionKey: sessionKey,
+            nextTreeSize: nextState.length,
+            publishedToVisibleTree: true,
+          })
         setChatTree(nextState)
         chatTreeRef.current = nextState
       }
@@ -609,6 +689,9 @@ export const useChat = (
     ) => {
       const getOrCreatePlayer = createAudioPlayerManager()
       const resumeSessionKey = activeSessionKeyRef.current
+      // Switching back to a session with a live stream must not subscribe twice.
+      if (isInstalledApp && respondingSessionsRef.current.get(resolveSessionKey(resumeSessionKey)))
+        return
       if (isInstalledApp && resumeSessionKey.startsWith('draft:'))
         draftIdsBySessionRef.current.set(resumeSessionKey, resumeSessionKey)
       handleResponding(true, resumeSessionKey)
@@ -659,7 +742,9 @@ export const useChat = (
           })
 
           if (isFirstMessage && newConversationId) {
-            conversationIdRef.current = newConversationId
+            conversationIdsBySessionRef.current.set(resumeSessionKey, newConversationId)
+            if (resumeSessionKey === activeSessionKeyRef.current)
+              conversationIdRef.current = newConversationId
             // Forward the session the resumption belongs to so the caller can
             // route cleanup to the correct draft.
             onConversationStarted?.(newConversationId, resumeSessionKey)
@@ -688,8 +773,13 @@ export const useChat = (
 
             if (onConversationComplete) {
               if (isInstalledApp && resumeSessionKey)
-                onConversationComplete(conversationIdRef.current, workflowRunId, resumeSessionKey)
-              else onConversationComplete(conversationIdRef.current, workflowRunId)
+                onConversationComplete(
+                  getConversationIdForSession(resumeSessionKey),
+                  workflowRunId,
+                  resumeSessionKey,
+                )
+              else
+                onConversationComplete(getConversationIdForSession(resumeSessionKey), workflowRunId)
             }
 
             if (
@@ -1052,6 +1142,9 @@ export const useChat = (
       createAudioPlayerManager,
       config?.suggested_questions_after_answer,
       options.isNewAgent,
+      getConversationIdForSession,
+      isInstalledApp,
+      resolveSessionKey,
     ],
   )
 
@@ -1100,8 +1193,12 @@ export const useChat = (
       const sessionKey = isInstalledApp
         ? resolveSessionKey(rawSessionKey)
         : activeSessionKeyRef.current
+      const isActiveSession =
+        !isInstalledApp || sessionKey === resolveSessionKey(activeSessionKeyRef.current)
       const sessionTree = isInstalledApp
-        ? chatTreesBySessionRef.current.get(sessionKey) || []
+        ? isActiveSession
+          ? chatTreeRef.current
+          : chatTreesBySessionRef.current.get(sessionKey) || []
         : chatTreeRef.current
       let nextState: ChatItemInTree[]
       const existingRootIndex = sessionTree.findIndex((item) =>
@@ -1133,8 +1230,6 @@ export const useChat = (
       }
       if (isInstalledApp) chatTreesBySessionRef.current.set(sessionKey, nextState)
       if (isInstalledApp) persistChatDraft(nextState, sessionKey)
-      const isActiveSession =
-        !isInstalledApp || sessionKey === resolveSessionKey(activeSessionKeyRef.current)
       if (isActiveSession) {
         setChatTree(nextState)
         chatTreeRef.current = nextState
@@ -1170,6 +1265,16 @@ export const useChat = (
       }
 
       const parentMessage = threadMessages.find((item) => item.id === data.parent_message_id)
+
+      if (isInstalledApp) {
+        console.warn('[installed-chat] send', {
+          conversationId: getConversationIdForSession(activeSessionKeyRef.current),
+          parentMessageId: data.parent_message_id || null,
+          parentFound: Boolean(parentMessage),
+          treeSize: chatTreeRef.current.length,
+          visibleMessageIds: threadMessages.map((item) => item.id),
+        })
+      }
 
       const placeholderQuestionId = `question-${Date.now()}`
       const questionItem = {
@@ -1218,7 +1323,7 @@ export const useChat = (
       const responseSessionKey = activeSessionKeyRef.current
       if (isInstalledApp && !draftIdsBySessionRef.current.has(responseSessionKey))
         draftIdsBySessionRef.current.set(responseSessionKey, `draft:${uuidV4()}`)
-      let responseConversationId = conversationIdRef.current
+      let responseConversationId = getConversationIdForSession(responseSessionKey)
 
       // A workflow may announce its conversation ID from workflow_started or
       // message_end instead of the first message chunk. Route all of those
@@ -1248,7 +1353,13 @@ export const useChat = (
         if (isInstalledApp)
           conversationIdsBySessionRef.current.set(newConversationId, newConversationId)
 
-        conversationIdRef.current = newConversationId
+        if (isInstalledApp) {
+          conversationIdsBySessionRef.current.set(startedSessionKey, newConversationId)
+          if (startedSessionKey === activeSessionKeyRef.current)
+            conversationIdRef.current = newConversationId
+        } else {
+          conversationIdRef.current = newConversationId
+        }
         responseItem.conversationId = newConversationId
 
         if (previousConversationId === newConversationId) return
@@ -1898,6 +2009,7 @@ export const useChat = (
       isInstalledApp,
       options.isNewAgent,
       resolveSessionKey,
+      getConversationIdForSession,
     ],
   )
 

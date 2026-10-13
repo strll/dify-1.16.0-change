@@ -79,6 +79,7 @@ const ChatWithHistory: FC<ChatWithHistoryProps> = ({ className }) => {
           )}
         >
           {!isMobile && <Header />}
+          {/* Installed chats own parallel streams: keep their owner mounted during history loading and selection changes. */}
           {!isInstalledApp && appChatListDataLoading && <Loading type="app" />}
           {(isInstalledApp || !appChatListDataLoading) && (
             <ChatWrapper key={isInstalledApp ? 'installed' : chatShouldReloadKey} />
@@ -142,6 +143,7 @@ const ChatWithHistoryWrap: FC<ChatWithHistoryWrapProps> = ({
     setIsResponding,
     currentConversationInputs,
     setCurrentConversationInputs,
+    handleConversationInputChange,
     allInputsHidden,
     initUserVariables,
   } = useChatWithHistory(installedAppInfo)
@@ -187,6 +189,7 @@ const ChatWithHistoryWrap: FC<ChatWithHistoryWrapProps> = ({
         setIsResponding,
         currentConversationInputs,
         setCurrentConversationInputs,
+        handleConversationInputChange,
         allInputsHidden,
         initUserVariables,
         isNewAgent,

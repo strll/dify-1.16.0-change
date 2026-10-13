@@ -112,7 +112,7 @@ services:
       - dify1160-custom-redis-1:redis
       - dify1160-custom-weaviate-1:weaviate
   web:
-    image: dify-web-custom:1.16.0-fable10
+    image: dify-web-custom:1.16.0-filefix32
     container_name: dify1160-custom-web-1
     environment:
       HOSTNAME: 0.0.0.0

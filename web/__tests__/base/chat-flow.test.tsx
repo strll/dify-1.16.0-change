@@ -101,6 +101,7 @@ const defaultHookReturn: HookReturn = {
   setIsResponding: vi.fn(),
   currentConversationInputs: {},
   setCurrentConversationInputs: vi.fn(),
+  handleConversationInputChange: vi.fn(),
   allInputsHidden: false,
   initUserVariables: {},
 }

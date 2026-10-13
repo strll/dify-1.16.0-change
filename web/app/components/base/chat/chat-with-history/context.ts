@@ -47,6 +47,7 @@ export type ChatWithHistoryContextValue = {
   setIsResponding: (state: boolean) => void
   currentConversationInputs: Record<string, any> | null
   setCurrentConversationInputs: (v: Record<string, any>) => void
+  handleConversationInputChange?: (variable: string, value: unknown) => void
   allInputsHidden: boolean
   initUserVariables?: {
     name?: string

@@ -33,11 +33,17 @@ const InputsFormContent = ({ showTip }: Props) => {
     newConversationInputs,
     newConversationInputsRef,
     handleNewConversationInputsChange,
+    isInstalledApp,
+    handleConversationInputChange,
   } = useChatWithHistoryContext()
   const inputsFormValue = currentConversationId ? currentConversationInputs : newConversationInputs
 
   const handleFormChange = useCallback(
     (variable: string, value: any) => {
+      if (isInstalledApp && handleConversationInputChange) {
+        handleConversationInputChange(variable, value)
+        return
+      }
       setCurrentConversationInputs({
         ...currentConversationInputs,
         [variable]: value,
@@ -52,6 +58,8 @@ const InputsFormContent = ({ showTip }: Props) => {
       handleNewConversationInputsChange,
       currentConversationInputs,
       setCurrentConversationInputs,
+      isInstalledApp,
+      handleConversationInputChange,
     ],
   )
 
@@ -122,6 +130,9 @@ const InputsFormContent = ({ showTip }: Props) => {
           )}
           {form.type === InputVarType.singleFile && (
             <FileUploaderInAttachmentWrapper
+              // A file store captures its initial value and upload callback once.
+              key={isInstalledApp ? currentConversationId : undefined}
+              syncValue={isInstalledApp}
               value={inputsFormValue?.[form.variable] ? [inputsFormValue?.[form.variable]] : []}
               onChange={(files) => handleFormChange(form.variable, files[0])}
               fileConfig={{
@@ -135,6 +146,8 @@ const InputsFormContent = ({ showTip }: Props) => {
           )}
           {form.type === InputVarType.multiFiles && (
             <FileUploaderInAttachmentWrapper
+              key={isInstalledApp ? currentConversationId : undefined}
+              syncValue={isInstalledApp}
               value={inputsFormValue?.[form.variable] || []}
               onChange={(files) => handleFormChange(form.variable, files)}
               fileConfig={{

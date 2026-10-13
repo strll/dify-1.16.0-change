@@ -17,6 +17,7 @@ import {
   updateFeedback,
 } from '@/service/share'
 import { shareQueryKeys } from '@/service/use-share'
+import { getProcessedInputs } from '../../chat/utils'
 import { CONVERSATION_ID_INFO } from '../../constants'
 import { useChatWithHistory } from '.././hooks'
 
@@ -1086,6 +1087,30 @@ describe('useChatWithHistory', () => {
 
   // Scenario: installedAppInfo changes the appSourceType and appData.
   describe('installedApp mode', () => {
+    it.each(['file', 'file-list'])(
+      'should serialize an empty optional %s default without blocking send',
+      async (fieldType) => {
+        const installedAppInfo = {
+          id: 'installed-app-id',
+          app: { name: 'Installed App', icon_type: 'emoji', icon: '🤖', icon_background: '#fff' },
+        } as unknown as InstalledApp
+        // The real workflow API uses an empty string for an unset optional file.
+        mockStoreState.appParams = {
+          user_input_form: [
+            { [fieldType]: { variable: 'file', label: 'file', default: '', required: false } },
+          ],
+        } as unknown as ChatConfig
+        mockFetchConversations.mockResolvedValue(createConversationData())
+        mockFetchChatList.mockResolvedValue({ data: [] })
+
+        const { result } = await renderWithClient(() => useChatWithHistory(installedAppInfo))
+
+        expect(
+          getProcessedInputs(result!.current.newConversationInputs, result!.current.inputsForms),
+        ).toEqual({ file: null })
+      },
+    )
+
     it('should use installedApp source type and derive appData from installedAppInfo', async () => {
       // Arrange
       const installedAppInfo = {
@@ -1110,7 +1135,6 @@ describe('useChatWithHistory', () => {
       expect(result!.current.appId).toBe('installed-app-id')
       expect(result!.current.appData?.site.title).toBe('Installed App')
     })
-
   })
 
   // Scenario: appPrevChatTree is built from chat list messages.
@@ -2291,6 +2315,35 @@ describe('useChatWithHistory', () => {
   // currentConversationId, so a draft is removed exactly once even when the
   // user has navigated to a different conversation mid-stream.
   describe('handleConversationStarted with multiple drafts', () => {
+    it('keeps the latest selection when an earlier render completes after switching through A B C', async () => {
+      mockFetchConversations.mockResolvedValue(createConversationData())
+      mockFetchChatList.mockResolvedValue({ data: [] })
+      const { result } = await renderWithClient(() => useChatWithHistory())
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const draftA = result!.current.currentConversationId
+      // An SSE subscription retains this render's callback, not result.current's latest callback.
+      const completeA = result!.current.handleNewConversationCompleted
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const draftB = result!.current.currentConversationId
+      const startB = result!.current.handleConversationStarted
+      act(() => {
+        result!.current.handleNewConversation()
+      })
+      const draftC = result!.current.currentConversationId
+      act(() => {
+        completeA('real-A', draftA)
+      })
+      expect(result!.current.currentConversationId).toBe(draftC)
+      act(() => {
+        startB('real-B', draftB)
+      })
+      expect(result!.current.currentConversationId).toBe(draftC)
+    })
+
     it('should remove only the draft matching the originating sessionId', async () => {
       // Arrange
       mockFetchConversations.mockResolvedValue(createConversationData())

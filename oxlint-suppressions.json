@@ -939,11 +939,6 @@
       "count": 2
     }
   },
-  "web/app/components/base/chat/chat-with-history/hooks.tsx": {
-    "typescript/no-explicit-any": {
-      "count": 18
-    }
-  },
   "web/app/components/base/chat/chat-with-history/index.tsx": {
     "eslint-react/set-state-in-effect": {
       "count": 1

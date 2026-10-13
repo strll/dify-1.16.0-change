@@ -4,6 +4,8 @@ import { act, renderHook } from '@testing-library/react'
 import { InputVarType, WorkflowRunningStatus } from '@/app/components/workflow/types'
 import { useParams, usePathname } from '@/next/navigation'
 import { sseGet, ssePost } from '@/service/base'
+import { upsertInstalledAppChatDraft } from '@/service/installed-app-chat-drafts'
+import { buildChatItemTree } from '../../utils'
 import { useChat } from '../hooks'
 
 const useTimestampMock = vi.hoisted(() =>
@@ -720,11 +722,7 @@ describe('useChat', () => {
 
       expect(onGetConversationMessages).toHaveBeenCalled()
       expect(onGetSuggestedQuestions).toHaveBeenCalled()
-      expect(onConversationComplete).toHaveBeenCalledWith(
-        'c-1',
-        'workflow-run-from-history',
-        '',
-      )
+      expect(onConversationComplete).toHaveBeenCalledWith('c-1', 'workflow-run-from-history', '')
 
       const updatedResponse = result.current.chatList[1]
       expect(updatedResponse!.content).toBe('Updated answer from history') // Fetched from mock
@@ -3371,10 +3369,222 @@ describe('useChat', () => {
   // Scenario: an installed-app page mounts at /installed/{appId} and the chat
   // config carries the appId so the per-session / IndexedDB paths light up.
   describe('Installed app session isolation', () => {
-    const flushTimers = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
-
     beforeEach(() => {
       vi.mocked(usePathname).mockReturnValue('/installed/app-installed')
+    })
+
+    it('keeps three sequential questions visible through workflow id assignment and completion', async () => {
+      let callbacks: HookCallbacks
+      vi.mocked(ssePost).mockImplementation(async (_url, _params, options) => {
+        callbacks = options as HookCallbacks
+      })
+      const { result, rerender } = renderHook(
+        ({ history }: { history: ChatItemInTree[] }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            history,
+            undefined,
+            undefined,
+            undefined,
+            'conversation-A',
+            { sessionId: 'conversation-A' },
+          ),
+        { initialProps: { history: [] as ChatItemInTree[] } },
+      )
+      let savedHistory: ChatItemInTree[] = []
+
+      for (let turn = 1; turn <= 3; turn++) {
+        const query = `question ${turn}`
+        act(() => {
+          result.current.handleSend(
+            'test-url',
+            {
+              query,
+              parent_message_id: turn > 1 ? `message-${turn - 1}` : undefined,
+            },
+            {},
+          )
+        })
+        expect(
+          result.current.chatList.filter((item) => !item.isAnswer).map((item) => item.content),
+        ).toEqual(Array.from({ length: turn }, (_, i) => `question ${i + 1}`))
+        act(() => {
+          callbacks.onWorkflowStarted({
+            conversation_id: 'conversation-A',
+            message_id: `message-${turn}`,
+            workflow_run_id: `run-${turn}`,
+            task_id: `task-${turn}`,
+          })
+        })
+        expect(result.current.chatList).toHaveLength(turn * 2)
+        expect(result.current.chatList.at(-2)?.content).toBe(query)
+        // A late history response contains only completed turns. It cannot
+        // replace the in-flight question, answer or selected branch.
+        rerender({ history: savedHistory.slice() })
+        expect(result.current.chatList).toHaveLength(turn * 2)
+        expect(result.current.chatList.at(-2)?.content).toBe(query)
+        act(() => {
+          vi.advanceTimersByTime(200)
+        })
+        expect(vi.mocked(upsertInstalledAppChatDraft).mock.calls.at(-1)?.[1].is_terminal).toBe(
+          false,
+        )
+        // Returning to this live answer must not start a second event stream.
+        act(() => {
+          result.current.handleResume(`message-${turn}`, `run-${turn}`, {})
+        })
+        expect(sseGet).not.toHaveBeenCalled()
+        act(() => {
+          callbacks.onData(`answer ${turn}`, false, { messageId: `message-${turn}` })
+          callbacks.onWorkflowFinished({ data: { status: 'succeeded' } })
+        })
+        await act(async () => {
+          await callbacks.onCompleted()
+        })
+        expect(result.current.chatList).toHaveLength(turn * 2)
+        expect(
+          result.current.chatList
+            .filter((item) => item.isAnswer)
+            .every((item) => (item.siblingCount ?? 1) === 1),
+        ).toBe(true)
+        savedHistory = buildChatItemTree(result.current.chatList)
+      }
+    })
+
+    it('keeps the second running turn when switching through A B C before its first text chunk', async () => {
+      const streams = new Map<string, HookCallbacks>()
+      vi.mocked(ssePost).mockImplementation(async (_url, params, options) => {
+        streams.set((params as { body: { query: string } }).body.query, options as HookCallbacks)
+      })
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            sessionId.startsWith('draft:') ? '' : sessionId,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'draft:A' } },
+      )
+      act(() => {
+        result.current.handleSend('test-url', { query: 'A first' }, {})
+      })
+      act(() => {
+        streams.get('A first')!.onWorkflowStarted({
+          conversation_id: 'real-A',
+          message_id: 'message-A1',
+          workflow_run_id: 'run-A1',
+          task_id: 'task-A1',
+        })
+      })
+      rerender({ sessionId: 'real-A' })
+      act(() => {
+        streams.get('A first')!.onData('answer A1', true, {
+          conversationId: 'real-A',
+          messageId: 'message-A1',
+        })
+      })
+      await act(async () => {
+        await streams.get('A first')!.onCompleted()
+      })
+      act(() => {
+        result.current.handleSend(
+          'test-url',
+          {
+            query: 'A second',
+            parent_message_id: 'message-A1',
+          },
+          {},
+        )
+        streams.get('A second')!.onWorkflowStarted({
+          conversation_id: 'real-A',
+          message_id: 'message-A2',
+          workflow_run_id: 'run-A2',
+          task_id: 'task-A2',
+        })
+      })
+      for (const sessionId of ['draft:B', 'draft:C']) {
+        rerender({ sessionId })
+        act(() => {
+          result.current.handleSend('test-url', { query: sessionId }, {})
+        })
+      }
+      rerender({ sessionId: 'real-A' })
+      expect(
+        result.current.chatList.filter((item) => !item.isAnswer).map((item) => item.content),
+      ).toEqual(['A first', 'A second'])
+      expect(result.current.isResponding).toBe(true)
+      rerender({ sessionId: 'draft:B' })
+      act(() => {
+        streams.get('A second')!.onData('answer A2', true, {
+          conversationId: 'real-A',
+          messageId: 'message-A2',
+        })
+      })
+      expect(
+        result.current.chatList.filter((item) => !item.isAnswer).map((item) => item.content),
+      ).toEqual(['draft:B'])
+      rerender({ sessionId: 'real-A' })
+      expect(result.current.chatList.map((item) => item.content)).toEqual([
+        'A first',
+        'answer A1',
+        'A second',
+        'answer A2',
+      ])
+    })
+
+    it('keeps A, B and C streams independent when background responses complete', async () => {
+      const streams = new Map<string, HookCallbacks>()
+      vi.mocked(ssePost).mockImplementation(async (_url, params, options) => {
+        streams.set((params as { body: { query: string } }).body.query, options as HookCallbacks)
+      })
+      const { result, rerender } = renderHook(
+        ({ sessionId }: { sessionId: string }) =>
+          useChat(
+            { appId: 'app-installed' } as ChatConfig,
+            undefined,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            sessionId,
+            { sessionId },
+          ),
+        { initialProps: { sessionId: 'A' } },
+      )
+      for (const sessionId of ['A', 'B', 'C']) {
+        rerender({ sessionId })
+        act(() => {
+          result.current.handleSend('test-url', { query: sessionId }, {})
+        })
+      }
+      for (const sessionId of ['A', 'B', 'C']) {
+        const stream = streams.get(sessionId)!
+        act(() => {
+          stream.onData(`answer ${sessionId}`, true, {
+            conversationId: sessionId,
+            messageId: `message-${sessionId}`,
+          })
+        })
+        await act(async () => {
+          await stream.onCompleted()
+        })
+        expect(
+          result.current.chatList.filter((item) => !item.isAnswer).map((item) => item.content),
+        ).toEqual(['C'])
+      }
+      for (const sessionId of ['A', 'B', 'C']) {
+        rerender({ sessionId })
+        expect(result.current.chatList.map((item) => item.content)).toEqual([
+          sessionId,
+          `answer ${sessionId}`,
+        ])
+      }
     })
 
     it('should preserve chatTree when switching between draft sessions', async () => {
@@ -3472,9 +3682,7 @@ describe('useChat', () => {
     })
 
     it('should clear only the active session snapshot when handleStop is called', async () => {
-      const { deleteInstalledAppChatDraft } = await import(
-        '@/service/installed-app-chat-drafts'
-      )
+      const { deleteInstalledAppChatDraft } = await import('@/service/installed-app-chat-drafts')
       const deleteSpy = vi.mocked(deleteInstalledAppChatDraft)
       deleteSpy.mockClear()
 
@@ -3587,20 +3795,12 @@ describe('useChat', () => {
 
       // First stream starts on draft:alpha.
       act(() => {
-        result.current.handleSend(
-          'test-url',
-          { query: 'A' },
-          { onConversationStarted },
-        )
+        result.current.handleSend('test-url', { query: 'A' }, { onConversationStarted })
       })
       // User opens a second draft and sends from it.
       rerender({ sessionId: 'draft:beta' })
       act(() => {
-        result.current.handleSend(
-          'test-url',
-          { query: 'B' },
-          { onConversationStarted },
-        )
+        result.current.handleSend('test-url', { query: 'B' }, { onConversationStarted })
       })
       // The first stream resolves first.
       act(() => {
@@ -3672,9 +3872,7 @@ describe('useChat', () => {
     })
 
     it('should NOT clear the wrong session snapshot when stopping a background stream', async () => {
-      const { deleteInstalledAppChatDraft } = await import(
-        '@/service/installed-app-chat-drafts'
-      )
+      const { deleteInstalledAppChatDraft } = await import('@/service/installed-app-chat-drafts')
       const deleteSpy = vi.mocked(deleteInstalledAppChatDraft)
       deleteSpy.mockClear()
 
@@ -3768,11 +3966,7 @@ describe('useChat', () => {
 
       // Send on draft:alpha.
       act(() => {
-        result.current.handleSend(
-          'test-url',
-          { query: 'A' },
-          { onGetConversationMessages },
-        )
+        result.current.handleSend('test-url', { query: 'A' }, { onGetConversationMessages })
       })
       act(() => {
         callbacks.onWorkflowStarted({

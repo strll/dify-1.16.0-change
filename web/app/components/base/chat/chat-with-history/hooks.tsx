@@ -1,5 +1,7 @@
+/* oxlint-disable typescript/no-explicit-any -- Dify input schemas are runtime-defined. */
 import type { ExtraContent } from '../chat/type'
 import type { Callback, ChatConfig, ChatItem, ChatItemInTree, Feedback } from '../types'
+import type { ChatWithHistoryContextValue } from './context'
 import type { InstalledApp } from '@/models/explore'
 import type { AppData, ConversationItem } from '@/models/share'
 import type { ChatDraftItem } from '@/service/installed-app-chat-drafts'
@@ -12,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   useConversationIdInfo,
+  useInstalledConversationIdInfo,
   useWebAppSidebarCollapseState,
 } from '@/app/components/base/chat/storage'
 import { getProcessedFilesFromResponse } from '@/app/components/base/file-uploader/utils'
@@ -48,6 +51,7 @@ import {
   getRawUserVariablesFromUrlParams,
 } from '../utils'
 import { publishConversationSyncEvent, subscribeConversationSyncEvents } from './conversation-sync'
+import { useInstalledInputs } from './use-installed-inputs'
 
 export const isDraftConversationId = (conversationId: string) => conversationId.startsWith('draft:')
 
@@ -196,7 +200,14 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     },
     [appId, setStoredSidebarCollapseState],
   )
-  const [conversationIdInfo, setConversationIdInfo] = useConversationIdInfo()
+  const [localConversationIdInfo, setLocalConversationIdInfo] = useConversationIdInfo()
+  const [installedConversationIdInfo, setInstalledConversationIdInfo] =
+    useInstalledConversationIdInfo()
+  // Selection belongs to this tab; background streams and other tabs cannot navigate it.
+  const conversationIdInfo = isInstalledApp ? installedConversationIdInfo : localConversationIdInfo
+  const setConversationIdInfo = isInstalledApp
+    ? setInstalledConversationIdInfo
+    : setLocalConversationIdInfo
   const currentConversationId = useMemo(
     () => conversationIdInfo?.[appId || '']?.[userId || 'DEFAULT'] || '',
     [appId, conversationIdInfo, userId],
@@ -205,9 +216,16 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     () => (isDraftConversationId(currentConversationId) ? '' : currentConversationId),
     [currentConversationId],
   )
+  // SSE handlers outlive the render that subscribed them. Read the latest
+  // selection so background completion cannot navigate away from another chat.
+  const selectedConversationIdRef = useRef(currentConversationId)
+  useEffect(() => {
+    selectedConversationIdRef.current = currentConversationId
+  }, [currentConversationId])
   const handleConversationIdInfoChange = useCallback(
     (changeConversationId: string) => {
       if (appId) {
+        selectedConversationIdRef.current = changeConversationId
         let prevValue = conversationIdInfo?.[appId || '']
         if (typeof prevValue === 'string') prevValue = {}
         setConversationIdInfo({
@@ -226,6 +244,7 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
   // items so the user sees their active conversations again. localStorage is
   // cleared of any persisted draft so the visible selection always points at
   // a real conversation that still exists server-side.
+  const [originConversationList, setOriginConversationList] = useState<ConversationItem[]>([])
   const draftsHydratedRef = useRef(false)
   useEffect(() => {
     if (!appId || draftsHydratedRef.current) return
@@ -355,14 +374,14 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     }
     return draftTree?.length ? draftTree : []
   }, [appChatListData, currentServerConversationId, restoredChatDraft])
-  const [showNewConversationItemInList, setShowNewConversationItemInList] = useState(false)
+  const [_showNewConversationItemInList, setShowNewConversationItemInList] = useState(false)
   const [draftConversationIds, setDraftConversationIds] = useState<string[]>([])
   const pinnedConversationList = useMemo(() => {
     return appPinnedConversationData?.data || []
   }, [appPinnedConversationData])
   const { t } = useTranslation()
   const newConversationInputsRef = useRef<Record<string, any>>({})
-  const [newConversationInputs, setNewConversationInputs] = useState<Record<string, any>>({})
+  const [legacyNewConversationInputs, setNewConversationInputs] = useState<Record<string, any>>({})
   const [initInputs, setInitInputs] = useState<Record<string, any>>({})
   const [initUserVariables, setInitUserVariables] = useState<Record<string, any>>({})
   const handleNewConversationInputsChange = useCallback((newInputs: Record<string, any>) => {
@@ -468,7 +487,6 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       enabled: !!newConversationId,
     },
   )
-  const [originConversationList, setOriginConversationList] = useState<ConversationItem[]>([])
   useEffect(() => {
     // A persisted conversation can be removed or belong to an older app
     // instance. Clear only a confirmed 404 so transient network failures do
@@ -536,17 +554,65 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       return newConversationInputsRef.current || {}
     return appChatListData.data.slice().pop().inputs || {}
   }, [appChatListData, currentConversationId])
-  const [currentConversationInputs, setCurrentConversationInputs] = useState<Record<string, any>>(
-    currentConversationLatestInputs || {},
-  )
+  const [legacyCurrentConversationInputs, setCurrentConversationInputs] = useState<
+    Record<string, any>
+  >(currentConversationLatestInputs || {})
   useEffect(() => {
     if (currentConversationItem)
       // oxlint-disable-next-line eslint-react/set-state-in-effect -- Selected conversation changes intentionally resync the editable input snapshot.
       setCurrentConversationInputs(currentConversationLatestInputs || {})
   }, [currentConversationItem, currentConversationLatestInputs])
+  const defaultInputs = useMemo(
+    () => Object.fromEntries(inputsForms.map((item) => [item.variable, item.default ?? null])),
+    [inputsForms],
+  )
+  const installedInitialInputs = useMemo(() => {
+    const raw = currentServerConversationId
+      ? appChatListData?.data.length
+        ? appChatListData.data[appChatListData.data.length - 1].inputs || {}
+        : currentConversationItem?.inputs || defaultInputs
+      : defaultInputs
+    const normalized = { ...raw }
+    // Saved file inputs use API fields; upload widgets and submission use FileEntity.
+    for (const form of inputsForms) {
+      const value = raw[form.variable]
+      // Workflow file defaults may be ""; submission expects null or a file object.
+      // Normalize only absent files, preserving scalar defaults such as 0 and false.
+      if (
+        (form.type === InputVarType.singleFile || form.type === InputVarType.multiFiles) &&
+        value === ''
+      )
+        normalized[form.variable] = null
+      if (form.type === InputVarType.singleFile && value?.transfer_method)
+        normalized[form.variable] = getProcessedFilesFromResponse([value])[0]
+      if (form.type === InputVarType.multiFiles && Array.isArray(value))
+        normalized[form.variable] = value.map((file) =>
+          file?.transfer_method ? getProcessedFilesFromResponse([file])[0] : file,
+        )
+    }
+    return normalized
+  }, [
+    currentServerConversationId,
+    appChatListData,
+    currentConversationItem,
+    defaultInputs,
+    inputsForms,
+  ])
+  const installedInputs = useInstalledInputs(currentConversationId, installedInitialInputs)
+  const { promoteInputs } = installedInputs
+  // Installed forms and outgoing requests share one per-session source of truth.
+  const newConversationInputs = isInstalledApp
+    ? (installedInputs.inputs as ChatWithHistoryContextValue['newConversationInputs'])
+    : legacyNewConversationInputs
+  const currentConversationInputs = isInstalledApp
+    ? (installedInputs.inputs as ChatWithHistoryContextValue['newConversationInputs'])
+    : legacyCurrentConversationInputs
   const checkInputsRequired = useCallback(
     (silent?: boolean) => {
       if (allInputsHidden) return true
+      const validationInputs = isInstalledApp
+        ? newConversationInputs
+        : newConversationInputsRef.current
       let hasEmptyInput = ''
       let fileIsUploading = false
       const requiredVars = inputsForms.filter(
@@ -556,14 +622,13 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
         requiredVars.forEach(({ variable, label, type }) => {
           if (hasEmptyInput) return
           if (fileIsUploading) return
-          if (!newConversationInputsRef.current[variable] && !silent)
-            hasEmptyInput = label as string
+          if (!validationInputs[variable] && !silent) hasEmptyInput = label as string
           if (
             (type === InputVarType.singleFile || type === InputVarType.multiFiles) &&
-            newConversationInputsRef.current[variable] &&
+            validationInputs[variable] &&
             !silent
           ) {
-            const files = newConversationInputsRef.current[variable]
+            const files = validationInputs[variable]
             if (Array.isArray(files))
               fileIsUploading = files.find(
                 (item) => item.transferMethod === TransferMethod.local_file && !item.uploadedId,
@@ -586,7 +651,7 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       }
       return true
     },
-    [inputsForms, t, allInputsHidden],
+    [inputsForms, t, allInputsHidden, isInstalledApp, newConversationInputs],
   )
   const handleStartChat = useCallback(
     (callback: any) => {
@@ -784,10 +849,12 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
             // the reverse-lookup path inside useChat which removes the
             // draft via the sessionAliasesRef.
             ''
-        : isDraftConversationId(currentConversationId)
-          ? currentConversationId
+        : isDraftConversationId(selectedConversationIdRef.current)
+          ? selectedConversationIdRef.current
           : ''
-      const isActiveSession = !sessionId || sessionId === currentConversationId
+      const isActiveSession = !sessionId || sessionId === selectedConversationIdRef.current
+      if (isInstalledApp)
+        promoteInputs(sessionId ?? selectedConversationIdRef.current, conversationId)
       if (isActiveSession) setNewConversationId(conversationId)
       if (draftSessionId)
         setDraftConversationIds((current) => current.filter((id) => id !== draftSessionId))
@@ -812,11 +879,26 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
       })
       if (appId) publishConversationSyncEvent({ type: 'created', appId, conversationId })
     },
-    [appId, currentConversationId, handleConversationIdInfoChange, isInstalledApp, t],
+    [
+      appId,
+      currentConversationId,
+      handleConversationIdInfoChange,
+      isInstalledApp,
+      promoteInputs,
+      t,
+    ],
   )
   const handleNewConversationCompleted = useCallback(
     (newConversationId: string, sessionId?: string) => {
-      const isActiveSession = !sessionId || sessionId === currentConversationId
+      // Preserve the 1.16.0 completion/name-generation contract on ordinary WebApps.
+      if (!isInstalledApp && !sessionId) {
+        setNewConversationId(newConversationId)
+        handleConversationIdInfoChange(newConversationId)
+        setShowNewConversationItemInList(false)
+        invalidateShareConversations()
+        return
+      }
+      const isActiveSession = !sessionId || sessionId === selectedConversationIdRef.current
       handleConversationStarted(newConversationId, sessionId)
       const completedDraftIds = restoredChatDrafts
         .filter(
@@ -923,6 +1005,7 @@ export const useChatWithHistory = (installedAppInfo?: InstalledApp) => {
     setIsResponding,
     currentConversationInputs,
     setCurrentConversationInputs,
+    handleConversationInputChange: installedInputs.changeInput,
     allInputsHidden,
     initUserVariables,
   }

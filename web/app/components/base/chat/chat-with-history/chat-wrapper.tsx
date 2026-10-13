@@ -31,6 +31,9 @@ import { useChatWithHistoryContext } from './context'
 import { isDraftConversationId } from './hooks'
 
 const ChatWrapper = () => {
+  useEffect(() => {
+    console.warn('[dify-frontend] build version', '1.16.0-filefix31-empty-file-default')
+  }, [])
   const { t } = useTranslation()
   const {
     appParams,
@@ -118,7 +121,9 @@ const ChatWrapper = () => {
   const resumedWorkflowMessagesRef = useRef(new Set<string>())
   const inputsFormValue = serverConversationId
     ? currentConversationInputs
-    : newConversationInputsRef?.current
+    : isInstalledApp
+      ? newConversationInputs
+      : newConversationInputsRef?.current
   const inputDisabled = useMemo(() => {
     if (allInputsHidden) return false
 
@@ -183,10 +188,13 @@ const ChatWrapper = () => {
     setIsResponding(respondingState)
   }, [respondingState, setIsResponding])
 
-  // Reconnect unfinished workflows after refresh. chatList already contains
-  // the merged server history and IndexedDB recovery snapshot.
+  // Reconnect unfinished workflows from loaded history after refresh.
+  // Live stream updates must never trigger a second recovery subscription.
   useEffect(() => {
-    if (!chatList || chatList.length === 0) return
+    // Recovery belongs to loaded history, never to the live send stream.
+    // Selecting a live answer here freezes the thread on its temporary id
+    // and opens a duplicate SSE subscription when workflow_started arrives.
+    if (respondingState || !appPrevChatTree?.length) return
 
     // Find the last answer item with workflow_run_id that needs resumption (DFS - find deepest first)
     let lastPausedNode: ChatItemInTree | undefined
@@ -206,7 +214,7 @@ const ChatWrapper = () => {
       })
     }
 
-    findLastPausedWorkflow(chatList)
+    findLastPausedWorkflow(appPrevChatTree)
 
     // Only resume the last paused workflow
     if (lastPausedNode && !resumedWorkflowMessagesRef.current.has(lastPausedNode.id)) {
@@ -223,11 +231,13 @@ const ChatWrapper = () => {
   }, [
     appId,
     appSourceType,
-    chatList,
+    appPrevChatTree,
+    respondingState,
     currentConversationId,
     handleConversationComplete,
     handleConversationStarted,
     handleSwitchSibling,
+    isInstalledApp,
   ])
 
   const [hasSent, setHasSent] = useState(false)
@@ -245,7 +255,8 @@ const ChatWrapper = () => {
         files,
         inputs: formatBooleanInputs(
           inputsForms,
-          currentConversationId ? currentConversationInputs : newConversationInputs,
+          // A local draft id does not yet identify a saved conversation.
+          serverConversationId ? currentConversationInputs : newConversationInputs,
         ),
         conversation_id: serverConversationId,
         parent_message_id: (isRegenerate ? parentAnswer?.id : getLastAnswer(chatList)?.id) || null,
@@ -281,6 +292,8 @@ const ChatWrapper = () => {
       appId,
       isHistoryConversation,
       handleConversationComplete,
+      handleConversationStarted,
+      isInstalledApp,
       isNewAgent,
       appData,
     ],

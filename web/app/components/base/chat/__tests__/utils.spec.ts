@@ -148,6 +148,12 @@ describe('build chat item tree and get thread messages', () => {
     expect(a4.siblingIndex).toBe(0)
   })
 
+  it('does not select an unrelated branch when the requested target is missing', () => {
+    const messages = getThreadMessages(tree2, 'message-from-a-stale-history-snapshot')
+
+    expect(messages).toEqual([])
+  })
+
   const tree3 = buildChatItemTree(mixedTestMessages as ChatItemInTree[])
   it('should build mixed chat items tree', () => {
     expect(tree3).toHaveLength(1)
